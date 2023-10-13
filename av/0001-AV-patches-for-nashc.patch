@@ -1,0 +1,46 @@
+From e2c0a7859bfb074b8740e085b1fcfc6a31eceb2c Mon Sep 17 00:00:00 2001
+From: Vlad <maksimvlad7@gmail.com>
+Date: Sun, 20 Aug 2023 19:06:20 +0300
+Subject: [PATCH] AV patches for nashc
+
+Change-Id: I234df4970a8fc43234656fea6149fbaf3ce7885e
+---
+ 0001-Some-patches.patch | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+ create mode 100644 0001-Some-patches.patch
+
+diff --git a/0001-Some-patches.patch b/0001-Some-patches.patch
+new file mode 100644
+index 0000000000..b466266e4a
+--- /dev/null
++++ b/0001-Some-patches.patch
+@@ -0,0 +1,26 @@
++From 7d0f347287b72952fc3ea2baea853d2cda04cc21 Mon Sep 17 00:00:00 2001
++From: Vlad <maksimvlad7@gmail.com>
++Date: Sun, 20 Aug 2023 19:05:52 +0300
++Subject: [PATCH] Some patches
++
++Change-Id: I715fe85c78da0ba1fe1542c6b9b63fc499c852d8
++---
++ .../camera/libcameraservice/utils/SessionConfigurationUtils.cpp | 2 +-
++ 1 file changed, 1 insertion(+), 1 deletion(-)
++
++diff --git a/services/camera/libcameraservice/utils/SessionConfigurationUtils.cpp b/services/camera/libcameraservice/utils/SessionConfigurationUtils.cpp
++index eb45fbec26..2e4add6cae 100644
++--- a/services/camera/libcameraservice/utils/SessionConfigurationUtils.cpp
+++++ b/services/camera/libcameraservice/utils/SessionConfigurationUtils.cpp
++@@ -398,7 +398,7 @@ binder::Status createSurfaceFromGbp(
++     uint64_t allowedFlags = GraphicBuffer::USAGE_SW_READ_MASK |
++                            GraphicBuffer::USAGE_HW_TEXTURE |
++                            GraphicBuffer::USAGE_HW_COMPOSER;
++-    bool flexibleConsumer = (consumerUsage & disallowedFlags) == 0 &&
+++    bool flexibleConsumer = !isPriviledgedClient && (consumerUsage & disallowedFlags) == 0 &&
++             (consumerUsage & allowedFlags) != 0;
++ 
++     surface = new Surface(gbp, useAsync);
++-- 
++2.41.0
++
+-- 
+2.41.0
+

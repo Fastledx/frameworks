@@ -1,0 +1,535 @@
+From c293b8b7249869bff27d929c14b565e180f2a03c Mon Sep 17 00:00:00 2001
+From: Vlad <maksimvlad7@gmail.com>
+Date: Sat, 19 Aug 2023 19:44:30 +0300
+Subject: [PATCH] PE+ native patches for nashc
+
+Change-Id: I133f72ef5e7dc35b9b95b13f55e8a1f2132abb8d
+---
+ cmds/installd/InstalldNativeService.cpp       | 23 +--------
+ cmds/installd/dexopt.cpp                      |  2 +-
+ cmds/installd/run_dex2oat.cpp                 | 21 ++++++--
+ cmds/installd/run_dex2oat.h                   |  5 +-
+ cmds/installd/run_dex2oat_test.cpp            | 50 +++++++++++++++++++
+ libs/binder/Android.bp                        |  5 ++
+ libs/renderengine/Android.bp                  |  3 ++
+ .../skia/filters/GaussianBlurFilter.cpp       |  2 +-
+ .../skia/filters/KawaseBlurFilter.cpp         | 10 ++--
+ .../skia/filters/KawaseBlurFilter.h           |  2 +-
+ libs/shaders/Android.bp                       |  5 ++
+ libs/vibrator/Android.bp                      |  1 +
+ services/gpuservice/Android.bp                |  1 +
+ services/inputflinger/Android.bp              |  5 ++
+ services/surfaceflinger/Android.bp            |  3 ++
+ .../DisplayHardware/AidlComposerHal.cpp       | 10 ++--
+ .../FrameTimeline/FrameTimeline.h             |  4 +-
+ services/surfaceflinger/SurfaceFlinger.cpp    | 10 ++--
+ services/surfaceflinger/SurfaceFlinger.h      |  2 +-
+ 19 files changed, 118 insertions(+), 46 deletions(-)
+
+diff --git a/cmds/installd/InstalldNativeService.cpp b/cmds/installd/InstalldNativeService.cpp
+index 317675d5ff..8a74a11ae7 100644
+--- a/cmds/installd/InstalldNativeService.cpp
++++ b/cmds/installd/InstalldNativeService.cpp
+@@ -128,8 +128,6 @@ static std::once_flag flag;
+ 
+ namespace {
+ 
+-constexpr const char* kDump = "android.permission.DUMP";
+-
+ static binder::Status ok() {
+     return binder::Status::ok();
+ }
+@@ -153,19 +151,6 @@ static binder::Status error(uint32_t code, const std::string& msg) {
+     return binder::Status::fromServiceSpecificError(code, String8(msg.c_str()));
+ }
+ 
+-binder::Status checkPermission(const char* permission) {
+-    pid_t pid;
+-    uid_t uid;
+-
+-    if (checkCallingPermission(String16(permission), reinterpret_cast<int32_t*>(&pid),
+-            reinterpret_cast<int32_t*>(&uid))) {
+-        return ok();
+-    } else {
+-        return exception(binder::Status::EX_SECURITY,
+-                StringPrintf("UID %d / PID %d lacks permission %s", uid, pid, permission));
+-    }
+-}
+-
+ binder::Status checkUid(uid_t expectedUid) {
+     uid_t uid = IPCThreadState::self()->getCallingUid();
+     if (uid == expectedUid || uid == AID_ROOT) {
+@@ -403,13 +388,7 @@ status_t InstalldNativeService::start() {
+     return android::OK;
+ }
+ 
+-status_t InstalldNativeService::dump(int fd, const Vector<String16> & /* args */) {
+-    const binder::Status dump_permission = checkPermission(kDump);
+-    if (!dump_permission.isOk()) {
+-        dprintf(fd, "%s\n", dump_permission.toString8().c_str());
+-        return PERMISSION_DENIED;
+-    }
+-
++status_t InstalldNativeService::dump(int fd, const Vector<String16>& /* args */) {
+     {
+         std::lock_guard<std::recursive_mutex> lock(mMountsLock);
+         dprintf(fd, "Storage mounts:\n");
+diff --git a/cmds/installd/dexopt.cpp b/cmds/installd/dexopt.cpp
+index ebb78913b1..34ea7597b4 100644
+--- a/cmds/installd/dexopt.cpp
++++ b/cmds/installd/dexopt.cpp
+@@ -1956,7 +1956,7 @@ int dexopt(const char* dex_path, uid_t uid, const char* pkgname, const char* ins
+                       join_fds(context_input_fds), swap_fd.get(), instruction_set, compiler_filter,
+                       debuggable, boot_complete, for_restore, target_sdk_version,
+                       enable_hidden_api_checks, generate_compact_dex, use_jitzygote_image,
+-                      compilation_reason);
++                      background_job_compile, compilation_reason);
+ 
+     bool cancelled = false;
+     pid_t pid = dexopt_status_->check_cancellation_and_fork(&cancelled);
+diff --git a/cmds/installd/run_dex2oat.cpp b/cmds/installd/run_dex2oat.cpp
+index 51c4589440..4221a3a593 100644
+--- a/cmds/installd/run_dex2oat.cpp
++++ b/cmds/installd/run_dex2oat.cpp
+@@ -81,6 +81,7 @@ void RunDex2Oat::Initialize(const UniqueFile& output_oat,
+                             bool enable_hidden_api_checks,
+                             bool generate_compact_dex,
+                             bool use_jitzygote,
++                            bool background_job_compile,
+                             const char* compilation_reason) {
+     PrepareBootImageFlags(use_jitzygote);
+ 
+@@ -92,7 +93,8 @@ void RunDex2Oat::Initialize(const UniqueFile& output_oat,
+                                debuggable, target_sdk_version, enable_hidden_api_checks,
+                                generate_compact_dex, compilation_reason);
+ 
+-    PrepareCompilerRuntimeAndPerfConfigFlags(post_bootcomplete, for_restore);
++    PrepareCompilerRuntimeAndPerfConfigFlags(post_bootcomplete, for_restore,
++                                             background_job_compile);
+ 
+     const std::string dex2oat_flags = GetProperty("dalvik.vm.dex2oat-flags", "");
+     std::vector<std::string> dex2oat_flags_args = SplitBySpaces(dex2oat_flags);
+@@ -296,7 +298,8 @@ void RunDex2Oat::PrepareCompilerConfigFlags(const UniqueFile& input_vdex,
+ }
+ 
+ void RunDex2Oat::PrepareCompilerRuntimeAndPerfConfigFlags(bool post_bootcomplete,
+-                                                          bool for_restore) {
++                                                          bool for_restore,
++                                                          bool background_job_compile) {
+     // CPU set
+     {
+         std::string cpu_set_format = "--cpu-set=%s";
+@@ -306,7 +309,12 @@ void RunDex2Oat::PrepareCompilerRuntimeAndPerfConfigFlags(bool post_bootcomplete
+                            "dalvik.vm.restore-dex2oat-cpu-set",
+                            "dalvik.vm.dex2oat-cpu-set",
+                            cpu_set_format)
+-                   : MapPropertyToArg("dalvik.vm.dex2oat-cpu-set", cpu_set_format))
++                   : (background_job_compile
++                      ? MapPropertyToArgWithBackup(
++                              "dalvik.vm.background-dex2oat-cpu-set",
++                              "dalvik.vm.dex2oat-cpu-set",
++                              cpu_set_format)
++                      : MapPropertyToArg("dalvik.vm.dex2oat-cpu-set", cpu_set_format)))
+                 : MapPropertyToArg("dalvik.vm.boot-dex2oat-cpu-set", cpu_set_format);
+         AddArg(dex2oat_cpu_set_arg);
+     }
+@@ -320,7 +328,12 @@ void RunDex2Oat::PrepareCompilerRuntimeAndPerfConfigFlags(bool post_bootcomplete
+                            "dalvik.vm.restore-dex2oat-threads",
+                            "dalvik.vm.dex2oat-threads",
+                            threads_format)
+-                   : MapPropertyToArg("dalvik.vm.dex2oat-threads", threads_format))
++                   : (background_job_compile
++                      ? MapPropertyToArgWithBackup(
++                              "dalvik.vm.background-dex2oat-threads",
++                              "dalvik.vm.dex2oat-threads",
++                              threads_format)
++                      : MapPropertyToArg("dalvik.vm.dex2oat-threads", threads_format)))
+                 : MapPropertyToArg("dalvik.vm.boot-dex2oat-threads", threads_format);
+         AddArg(dex2oat_threads_arg);
+     }
+diff --git a/cmds/installd/run_dex2oat.h b/cmds/installd/run_dex2oat.h
+index 559244f2b7..c13e1f1acb 100644
+--- a/cmds/installd/run_dex2oat.h
++++ b/cmds/installd/run_dex2oat.h
+@@ -51,6 +51,7 @@ class RunDex2Oat {
+                     bool enable_hidden_api_checks,
+                     bool generate_compact_dex,
+                     bool use_jitzygote,
++                    bool background_job_compile,
+                     const char* compilation_reason);
+ 
+     void Exec(int exit_code);
+@@ -76,7 +77,9 @@ class RunDex2Oat {
+                                     bool enable_hidden_api_checks,
+                                     bool generate_compact_dex,
+                                     const char* compilation_reason);
+-    void PrepareCompilerRuntimeAndPerfConfigFlags(bool post_bootcomplete, bool for_restore);
++    void PrepareCompilerRuntimeAndPerfConfigFlags(bool post_bootcomplete,
++                                                  bool for_restore,
++                                                  bool background_job_compile);
+ 
+     virtual std::string GetProperty(const std::string& key, const std::string& default_value);
+     virtual bool GetBoolProperty(const std::string& key, bool default_value);
+diff --git a/cmds/installd/run_dex2oat_test.cpp b/cmds/installd/run_dex2oat_test.cpp
+index 2a8135a037..304ba7b04f 100644
+--- a/cmds/installd/run_dex2oat_test.cpp
++++ b/cmds/installd/run_dex2oat_test.cpp
+@@ -115,6 +115,7 @@ class RunDex2OatTest : public testing::Test {
+         bool enable_hidden_api_checks = false;
+         bool generate_compact_dex = true;
+         bool use_jitzygote = false;
++        bool background_job_compile = false;
+         const char* compilation_reason = nullptr;
+     };
+ 
+@@ -259,6 +260,7 @@ class RunDex2OatTest : public testing::Test {
+                           args->enable_hidden_api_checks,
+                           args->generate_compact_dex,
+                           args->use_jitzygote,
++                          args->background_job_compile,
+                           args->compilation_reason);
+         runner.Exec(/*exit_code=*/ 0);
+     }
+@@ -375,6 +377,30 @@ TEST_F(RunDex2OatTest, CpuSetPostBootCompleteNotForRestore) {
+     VerifyExpectedFlags();
+ }
+ 
++TEST_F(RunDex2OatTest, CpuSetPostBootCompleteBackground) {
++    setSystemProperty("dalvik.vm.background-dex2oat-cpu-set", "1,3");
++    setSystemProperty("dalvik.vm.dex2oat-cpu-set", "1,2");
++    auto args = RunDex2OatArgs::MakeDefaultTestArgs();
++    args->post_bootcomplete = true;
++    args->background_job_compile = true;
++    CallRunDex2Oat(std::move(args));
++
++    SetExpectedFlagUsed("--cpu-set", "=1,3");
++    VerifyExpectedFlags();
++}
++
++TEST_F(RunDex2OatTest, CpuSetPostBootCompleteBackground_Backup) {
++    setSystemProperty("dalvik.vm.background-dex2oat-cpu-set", "");
++    setSystemProperty("dalvik.vm.dex2oat-cpu-set", "1,2");
++    auto args = RunDex2OatArgs::MakeDefaultTestArgs();
++    args->post_bootcomplete = true;
++    args->background_job_compile = true;
++    CallRunDex2Oat(std::move(args));
++
++    SetExpectedFlagUsed("--cpu-set", "=1,2");
++    VerifyExpectedFlags();
++}
++
+ TEST_F(RunDex2OatTest, CpuSetPostBootCompleteForRestore) {
+     setSystemProperty("dalvik.vm.restore-dex2oat-cpu-set", "1,2");
+     setSystemProperty("dalvik.vm.dex2oat-cpu-set", "2,3");
+@@ -481,6 +507,30 @@ TEST_F(RunDex2OatTest, ThreadsPostBootCompleteNotForRestore) {
+     VerifyExpectedFlags();
+ }
+ 
++TEST_F(RunDex2OatTest, ThreadsPostBootCompleteBackground) {
++    setSystemProperty("dalvik.vm.background-dex2oat-threads", "2");
++    setSystemProperty("dalvik.vm.dex2oat-threads", "3");
++    auto args = RunDex2OatArgs::MakeDefaultTestArgs();
++    args->post_bootcomplete = true;
++    args->background_job_compile = true;
++    CallRunDex2Oat(std::move(args));
++
++    SetExpectedFlagUsed("-j", "2");
++    VerifyExpectedFlags();
++}
++
++TEST_F(RunDex2OatTest, ThreadsPostBootCompleteBackground_Backup) {
++    setSystemProperty("dalvik.vm.background-dex2oat-threads", "");
++    setSystemProperty("dalvik.vm.dex2oat-threads", "3");
++    auto args = RunDex2OatArgs::MakeDefaultTestArgs();
++    args->post_bootcomplete = true;
++    args->background_job_compile = true;
++    CallRunDex2Oat(std::move(args));
++
++    SetExpectedFlagUsed("-j", "3");
++    VerifyExpectedFlags();
++}
++
+ TEST_F(RunDex2OatTest, ThreadsPostBootCompleteForRestore) {
+     setSystemProperty("dalvik.vm.restore-dex2oat-threads", "4");
+     setSystemProperty("dalvik.vm.dex2oat-threads", "5");
+diff --git a/libs/binder/Android.bp b/libs/binder/Android.bp
+index d8d2cf2652..6254921eb9 100644
+--- a/libs/binder/Android.bp
++++ b/libs/binder/Android.bp
+@@ -204,6 +204,11 @@ cc_library {
+         misc_undefined: ["integer"],
+     },
+ 
++    lto: {
++        thin: true,
++    },
++    whole_program_vtables: true, // Requires ThinLTO
++
+     tidy: true,
+     tidy_flags: [
+         // Only check our headers
+diff --git a/libs/renderengine/Android.bp b/libs/renderengine/Android.bp
+index cb92df388b..732e65c7ff 100644
+--- a/libs/renderengine/Android.bp
++++ b/libs/renderengine/Android.bp
+@@ -11,6 +11,7 @@ cc_defaults {
+     name: "renderengine_defaults",
+     cflags: [
+         "-DLOG_TAG=\"RenderEngine\"",
++        "-O3",
+         "-Wall",
+         "-Werror",
+         "-Wthread-safety",
+@@ -116,6 +117,7 @@ cc_library_static {
+         "-fvisibility=hidden",
+         "-Werror=format",
+         "-Wno-unused-parameter",
++        "-O3",
+     ],
+     srcs: [
+         ":librenderengine_sources",
+@@ -133,6 +135,7 @@ cc_library_static {
+     lto: {
+         thin: true,
+     },
++    whole_program_vtables: true, // Requires ThinLTO
+ }
+ 
+ cc_library_static {
+diff --git a/libs/renderengine/skia/filters/GaussianBlurFilter.cpp b/libs/renderengine/skia/filters/GaussianBlurFilter.cpp
+index 55867a95cc..341a7356d5 100644
+--- a/libs/renderengine/skia/filters/GaussianBlurFilter.cpp
++++ b/libs/renderengine/skia/filters/GaussianBlurFilter.cpp
+@@ -35,7 +35,7 @@ namespace skia {
+ 
+ // This constant approximates the scaling done in the software path's
+ // "high quality" mode, in SkBlurMask::Blur() (1 / sqrt(3)).
+-static const float BLUR_SIGMA_SCALE = 0.57735f;
++static const float BLUR_SIGMA_SCALE = 0.02405625f;
+ 
+ GaussianBlurFilter::GaussianBlurFilter(): BlurFilter(/* maxCrossFadeRadius= */ 0.0f) {}
+ 
+diff --git a/libs/renderengine/skia/filters/KawaseBlurFilter.cpp b/libs/renderengine/skia/filters/KawaseBlurFilter.cpp
+index bfde06fd9a..5791413d5b 100644
+--- a/libs/renderengine/skia/filters/KawaseBlurFilter.cpp
++++ b/libs/renderengine/skia/filters/KawaseBlurFilter.cpp
+@@ -60,13 +60,11 @@ sk_sp<SkImage> KawaseBlurFilter::generate(GrRecordingContext* context, const uin
+     // Kawase is an approximation of Gaussian, but it behaves differently from it.
+     // A radius transformation is required for approximating them, and also to introduce
+     // non-integer steps, necessary to smoothly interpolate large radii.
+-    float tmpRadius = (float)blurRadius / 2.0f;
++    float tmpRadius = (float)blurRadius / 16.0f;
+     float numberOfPasses = std::min(kMaxPasses, (uint32_t)ceil(tmpRadius));
+     float radiusByPasses = tmpRadius / (float)numberOfPasses;
+ 
+-    // create blur surface with the bit depth and colorspace of the original surface
+-    SkImageInfo scaledInfo = input->imageInfo().makeWH(std::ceil(blurRect.width() * kInputScale),
+-                                                       std::ceil(blurRect.height() * kInputScale));
++
+ 
+     // For sampling Skia's API expects the inverse of what logically seems appropriate. In this
+     // case you might expect Translate(blurRect.fLeft, blurRect.fTop) X Scale(kInverseInputScale)
+@@ -81,6 +79,10 @@ sk_sp<SkImage> KawaseBlurFilter::generate(GrRecordingContext* context, const uin
+             input->makeShader(SkTileMode::kClamp, SkTileMode::kClamp, linear, blurMatrix);
+     blurBuilder.uniform("in_blurOffset") = radiusByPasses * kInputScale;
+ 
++    // create blur surface with the bit depth and colorspace of the original surface
++    SkImageInfo scaledInfo = input->imageInfo().makeWH(std::ceil(blurRect.width() * kInputScale),
++                                                       std::ceil(blurRect.height() * kInputScale));
++
+     sk_sp<SkImage> tmpBlur(blurBuilder.makeImage(context, nullptr, scaledInfo, false));
+ 
+     // And now we'll build our chain of scaled blur stages
+diff --git a/libs/renderengine/skia/filters/KawaseBlurFilter.h b/libs/renderengine/skia/filters/KawaseBlurFilter.h
+index 0ac5ac8866..5127a14e70 100644
+--- a/libs/renderengine/skia/filters/KawaseBlurFilter.h
++++ b/libs/renderengine/skia/filters/KawaseBlurFilter.h
+@@ -36,7 +36,7 @@ namespace skia {
+ class KawaseBlurFilter: public BlurFilter {
+ public:
+     // Maximum number of render passes
+-    static constexpr uint32_t kMaxPasses = 4;
++    static constexpr uint32_t kMaxPasses = 8;
+ 
+     explicit KawaseBlurFilter();
+     virtual ~KawaseBlurFilter(){}
+diff --git a/libs/shaders/Android.bp b/libs/shaders/Android.bp
+index 6b936de0ec..ab0c03ea21 100644
+--- a/libs/shaders/Android.bp
++++ b/libs/shaders/Android.bp
+@@ -48,4 +48,9 @@ cc_library_static {
+     srcs: [
+         "shaders.cpp",
+     ],
++
++    lto: {
++        thin: true,
++    },
++    whole_program_vtables: true, // Requires ThinLTO
+ }
+diff --git a/libs/vibrator/Android.bp b/libs/vibrator/Android.bp
+index 83c250a24f..0be8cd8075 100644
+--- a/libs/vibrator/Android.bp
++++ b/libs/vibrator/Android.bp
+@@ -53,6 +53,7 @@ cc_library {
+         "-Wno-missing-field-initializers",
+         "-Wno-unused-variable",
+         "-Wno-unused-parameter",
++        "-O3",
+     ],
+ 
+     export_include_dirs: ["include"],
+diff --git a/services/gpuservice/Android.bp b/services/gpuservice/Android.bp
+index 5b4ee21b42..d7bafd5896 100644
+--- a/services/gpuservice/Android.bp
++++ b/services/gpuservice/Android.bp
+@@ -16,6 +16,7 @@ cc_defaults {
+         "-Wthread-safety",
+         "-Wunused",
+         "-Wunreachable-code",
++	"-O3",
+     ],
+ }
+ 
+diff --git a/services/inputflinger/Android.bp b/services/inputflinger/Android.bp
+index 41878e3487..4fe76c99e2 100644
+--- a/services/inputflinger/Android.bp
++++ b/services/inputflinger/Android.bp
+@@ -38,10 +38,15 @@ cc_defaults {
+         "-Wshadow",
+         "-Wshadow-field-in-constructor-modified",
+         "-Wshadow-uncaptured-local",
++	"-Ofast",
+     ],
+     sanitize: {
+         misc_undefined: ["bounds"],
+     },
++    lto: {
++        thin: true,
++    },
++    whole_program_vtables: true, // Requires ThinLTO
+     tidy: true,
+     tidy_checks: [
+         "-*", // Disable all checks not explicitly enabled for now
+diff --git a/services/surfaceflinger/Android.bp b/services/surfaceflinger/Android.bp
+index 7548380a58..7508607f38 100644
+--- a/services/surfaceflinger/Android.bp
++++ b/services/surfaceflinger/Android.bp
+@@ -18,6 +18,7 @@ cc_defaults {
+         "-Wunused",
+         "-Wunreachable-code",
+         "-Wconversion",
++	"-O3",
+     ],
+ }
+ 
+@@ -32,6 +33,7 @@ cc_defaults {
+         "-DLOG_TAG=\"SurfaceFlinger\"",
+         "-DGL_GLEXT_PROTOTYPES",
+         "-DEGL_EGLEXT_PROTOTYPES",
++	"-O3",
+     ],
+     shared_libs: [
+         "android.hardware.configstore-utils",
+@@ -213,6 +215,7 @@ cc_defaults {
+     ],
+     cflags: [
+         "-DLOG_TAG=\"SurfaceFlinger\"",
++	"-O3",
+     ],
+     shared_libs: [
+         "android.frameworks.displayservice@1.0",
+diff --git a/services/surfaceflinger/DisplayHardware/AidlComposerHal.cpp b/services/surfaceflinger/DisplayHardware/AidlComposerHal.cpp
+index 79dcd159d3..36512311d1 100644
+--- a/services/surfaceflinger/DisplayHardware/AidlComposerHal.cpp
++++ b/services/surfaceflinger/DisplayHardware/AidlComposerHal.cpp
+@@ -264,17 +264,21 @@ std::string AidlComposer::dumpDebugInfo() {
+     }
+ 
+     std::string str;
++    // Use other thread to read pipe to prevent
++    // pipe is full, making HWC be blocked in writing.
++    std::thread t([&]() {
++        base::ReadFdToString(pipefds[0], &str);
++    });
+     const auto status = mAidlComposer->dump(pipefds[1], /*args*/ nullptr, /*numArgs*/ 0);
+     // Close the write-end of the pipe to make sure that when reading from the
+     // read-end we will get eof instead of blocking forever
+     close(pipefds[1]);
+ 
+-    if (status == STATUS_OK) {
+-        base::ReadFdToString(pipefds[0], &str);
+-    } else {
++    if (status != STATUS_OK) {
+         ALOGE("dumpDebugInfo: dump failed: %d", status);
+     }
+ 
++    t.join();
+     close(pipefds[0]);
+     return str;
+ }
+diff --git a/services/surfaceflinger/FrameTimeline/FrameTimeline.h b/services/surfaceflinger/FrameTimeline/FrameTimeline.h
+index a2305af554..3611deabce 100644
+--- a/services/surfaceflinger/FrameTimeline/FrameTimeline.h
++++ b/services/surfaceflinger/FrameTimeline/FrameTimeline.h
+@@ -314,12 +314,12 @@ public:
+     virtual void parseArgs(const Vector<String16>& args, std::string& result) = 0;
+ 
+     // Sets the max number of display frames that can be stored. Called by SF backdoor.
+-    virtual void setMaxDisplayFrames(uint32_t size);
++    virtual void setMaxDisplayFrames(uint32_t size) = 0;
+ 
+     // Computes the historical fps for the provided set of layer IDs
+     // The fps is compted from the linear timeline of present timestamps for DisplayFrames
+     // containing at least one layer ID.
+-    virtual float computeFps(const std::unordered_set<int32_t>& layerIds);
++    virtual float computeFps(const std::unordered_set<int32_t>& layerIds) = 0;
+ 
+     // Restores the max number of display frames to default. Called by SF backdoor.
+     virtual void reset() = 0;
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index edc063618d..f42c5acd08 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -336,8 +336,9 @@ SurfaceFlinger::SurfaceFlinger(Factory& factory, SkipInitializationTag)
+         mCompositionEngine(mFactory.createCompositionEngine()),
+         mHwcServiceName(base::GetProperty("debug.sf.hwc_service_name"s, "default"s)),
+         mTunnelModeEnabledReporter(new TunnelModeEnabledReporter()),
+-        mInternalDisplayDensity(getDensityFromProperty("ro.sf.lcd_density", true)),
+         mEmulatedDisplayDensity(getDensityFromProperty("qemu.sf.lcd_density", false)),
++        mInternalDisplayDensity(
++                getDensityFromProperty("ro.sf.lcd_density", !mEmulatedDisplayDensity)),
+         mPowerAdvisor(std::make_unique<Hwc2::impl::PowerAdvisor>(*this)),
+         mWindowInfosListenerInvoker(sp<WindowInfosListenerInvoker>::make(*this)) {
+     ALOGI("Using HWComposer service: %s", mHwcServiceName.c_str());
+@@ -1979,11 +1980,8 @@ void SurfaceFlinger::setVsyncEnabled(bool enabled) {
+ }
+ 
+ SurfaceFlinger::FenceWithFenceTime SurfaceFlinger::previousFrameFence() {
+-    const auto now = systemTime();
+-    const auto vsyncPeriod = mScheduler->getDisplayStatInfo(now).vsyncPeriod;
+-    const bool expectedPresentTimeIsTheNextVsync = mExpectedPresentTime - now <= vsyncPeriod;
+-    return expectedPresentTimeIsTheNextVsync ? mPreviousPresentFences[0]
+-                                             : mPreviousPresentFences[1];
++     return mVsyncModulator->getVsyncConfig().sfOffset >= 0 ? mPreviousPresentFences[0]
++                                                           : mPreviousPresentFences[1];
+ }
+ 
+ bool SurfaceFlinger::previousFramePending(int graceTimeMs) {
+diff --git a/services/surfaceflinger/SurfaceFlinger.h b/services/surfaceflinger/SurfaceFlinger.h
+index 5c6651609c..ab8ca8ebb4 100644
+--- a/services/surfaceflinger/SurfaceFlinger.h
++++ b/services/surfaceflinger/SurfaceFlinger.h
+@@ -1383,8 +1383,8 @@ private:
+     sp<TunnelModeEnabledReporter> mTunnelModeEnabledReporter;
+     ui::DisplayPrimaries mInternalDisplayPrimaries;
+ 
+-    const float mInternalDisplayDensity;
+     const float mEmulatedDisplayDensity;
++    const float mInternalDisplayDensity;
+ 
+     // Should only be accessed by the main thread.
+     sp<os::IInputFlinger> mInputFlinger;
+-- 
+2.41.0
+

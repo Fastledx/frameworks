@@ -1,0 +1,2137 @@
+From 65a92dde23fc23781a948aad8086e762bdbc97c9 Mon Sep 17 00:00:00 2001
+From: Suren Baghdasaryan <surenb@google.com>
+Date: Tue, 4 Apr 2023 04:42:50 +0000
+Subject: [PATCH 1/2] PE+ patches for nashc
+
+Change-Id: I704deb381aadc9b72a20f95db355ababa792a859
+---
+ .../android/app/SystemServiceRegistry.java    |   8 +-
+ .../android/content/pm/PackageParser.java     |  14 ++
+ core/java/android/os/Trace.java               |   4 +
+ core/java/android/view/LayoutInflater.java    | 217 ++++++++++++----
+ core/java/android/view/ViewConfiguration.java |  14 +-
+ core/java/android/view/ViewRootImpl.java      |   2 +-
+ core/java/android/widget/AbsListView.java     |  15 +-
+ core/java/android/widget/ScrollView.java      |   1 +
+ .../SystemNotificationChannels.java           |   2 +-
+ .../com/android/server/LocalServices.java     |   6 +-
+ .../drawable-hdpi/stat_sys_upload_anim1.png   | Bin 634 -> 219 bytes
+ .../drawable-hdpi/stat_sys_upload_anim2.png   | Bin 681 -> 237 bytes
+ .../drawable-mdpi/stat_sys_upload_anim1.png   | Bin 545 -> 221 bytes
+ .../drawable-mdpi/stat_sys_upload_anim2.png   | Bin 577 -> 225 bytes
+ .../drawable-xhdpi/stat_sys_upload_anim1.png  | Bin 759 -> 285 bytes
+ .../drawable-xhdpi/stat_sys_upload_anim2.png  | Bin 814 -> 294 bytes
+ .../drawable-xxhdpi/stat_sys_upload_anim1.png | Bin 624 -> 3174 bytes
+ .../drawable-xxhdpi/stat_sys_upload_anim2.png | Bin 641 -> 3182 bytes
+ core/res/res/values/config.xml                |  12 +-
+ .../wm/shell/pip/PipTaskOrganizer.java        |   7 +-
+ libs/hwui/Android.bp                          |  10 +-
+ media/java/android/media/MediaCodec.java      |   7 +-
+ packages/SystemUI/res/layout/qs_carrier.xml   |   7 +-
+ .../SystemUI/res/values/custom_config.xml     |  41 ++++
+ .../SystemUI/res/values/custom_dimens.xml     |   2 +
+ .../src/com/android/systemui/SwipeHelper.java |   2 +-
+ .../systemui/biometrics/UdfpsController.java  | 108 ++++++++
+ .../biometrics/UdfpsControllerOverlay.kt      |  10 +-
+ .../systemui/doze/util/BurnInHelper.kt        |  18 +-
+ .../navigationbar/NavigationBarView.java      |  23 ++
+ .../screenshot/ScreenshotController.java      |   2 +-
+ .../systemui/screenshot/ScreenshotView.java   |   4 +-
+ .../statusbar/phone/CentralSurfacesImpl.java  |   9 +
+ .../statusbar/phone/PhoneStatusBarView.java   |  26 +-
+ .../policy/BurnInProtectionController.kt      | 231 ++++++++++++++++++
+ .../android/systemui/tuner/TunerFragment.java |   3 +
+ .../android/server/StorageManagerService.java |  13 +-
+ .../java/com/android/server/Watchdog.java     |   2 +
+ .../com/android/server/am/ProcessList.java    |  11 +-
+ .../android/server/power/ShutdownThread.java  |   2 +-
+ .../com/android/server/wm/InsetsPolicy.java   |   8 +-
+ .../server/wm/InsetsStateController.java      |  23 +-
+ .../core/java/com/android/server/wm/Task.java |  11 +-
+ .../server/wm/WindowProcessController.java    |   7 +
+ .../server/wm/WindowProcessControllerMap.java |   3 +-
+ .../wm/WindowProcessControllerMapTests.java   |  12 +
+ .../wm/WindowProcessControllerTests.java      |  11 +
+ 47 files changed, 787 insertions(+), 121 deletions(-)
+ create mode 100644 packages/SystemUI/src/com/android/systemui/statusbar/policy/BurnInProtectionController.kt
+
+diff --git a/core/java/android/app/SystemServiceRegistry.java b/core/java/android/app/SystemServiceRegistry.java
+index 0463b57c542a..b8e4fd0e8229 100644
+--- a/core/java/android/app/SystemServiceRegistry.java
++++ b/core/java/android/app/SystemServiceRegistry.java
+@@ -213,7 +213,6 @@ import android.telephony.MmsManager;
+ import android.telephony.TelephonyFrameworkInitializer;
+ import android.telephony.TelephonyRegistryManager;
+ import android.transparency.BinaryTransparencyManager;
+-import android.util.ArrayMap;
+ import android.util.Log;
+ import android.util.Slog;
+ import android.uwb.UwbFrameworkInitializer;
+@@ -249,6 +248,7 @@ import com.android.internal.util.Preconditions;
+ import com.oplus.os.ILinearmotorVibratorService;
+ import com.oplus.os.LinearmotorVibrator;
+ 
++import java.util.HashMap;
+ import java.util.Map;
+ import java.util.Objects;
+ 
+@@ -268,10 +268,10 @@ public final class SystemServiceRegistry {
+     // Service registry information.
+     // This information is never changed once static initialization has completed.
+     private static final Map<Class<?>, String> SYSTEM_SERVICE_NAMES =
+-            new ArrayMap<Class<?>, String>();
++            new HashMap<Class<?>, String>();
+     private static final Map<String, ServiceFetcher<?>> SYSTEM_SERVICE_FETCHERS =
+-            new ArrayMap<String, ServiceFetcher<?>>();
+-    private static final Map<String, String> SYSTEM_SERVICE_CLASS_NAMES = new ArrayMap<>();
++            new HashMap<String, ServiceFetcher<?>>();
++    private static final Map<String, String> SYSTEM_SERVICE_CLASS_NAMES = new HashMap<>();
+ 
+     private static int sServiceCacheSize;
+ 
+diff --git a/core/java/android/content/pm/PackageParser.java b/core/java/android/content/pm/PackageParser.java
+index 2333bd9e7818..4436b7751217 100644
+--- a/core/java/android/content/pm/PackageParser.java
++++ b/core/java/android/content/pm/PackageParser.java
+@@ -5599,6 +5599,20 @@ public class PackageParser {
+ 
+         if (data == null) {
+             data = new Bundle();
++            data.putBoolean("batch_opted_out_by_default", true);
++            data.putBoolean("com.ad4screen.no_geoloc", true);
++            data.putBoolean("com.facebook.sdk.AutoLogAppEventsEnabled", false);
++            data.putBoolean("com.mixpanel.android.MPConfig.UseIpAddressForGeolocation", false);
++            data.putBoolean("com.webengage.sdk.android.location_tracking", false);
++            data.putBoolean("firebase_analytics_collection_deactivated", true);
++            data.putBoolean("firebase_analytics_collection_enabled", false);
++            data.putBoolean("firebase_crash_collection_enabled", false);
++            data.putBoolean("firebase_performance_collection_deactivated", true);
++            data.putBoolean("google_analytics_adid_collection_enabled", false);
++            data.putBoolean("google_analytics_ssaid_collection_enabled", false);
++            data.putBoolean("google_analytics_default_allow_ad_personalization_signals", false);
++            data.putString("com.ad4screen.tracking_mode", "Restricted");
++            data.putString("com.sprooki.LOCATION_SERVICES", "disable");
+         }
+ 
+         String name = sa.getNonConfigurationString(
+diff --git a/core/java/android/os/Trace.java b/core/java/android/os/Trace.java
+index ca3433764308..35049bbba2c4 100644
+--- a/core/java/android/os/Trace.java
++++ b/core/java/android/os/Trace.java
+@@ -161,6 +161,10 @@ public final class Trace {
+     @UnsupportedAppUsage
+     @SystemApi(client = MODULE_LIBRARIES)
+     public static boolean isTagEnabled(long traceTag) {
++        if (!Build.IS_ENG) {
++            return false;
++        }
++
+         long tags = nativeGetEnabledTags();
+         return (tags & traceTag) != 0;
+     }
+diff --git a/core/java/android/view/LayoutInflater.java b/core/java/android/view/LayoutInflater.java
+index df78827534a6..cd2ea4311264 100644
+--- a/core/java/android/view/LayoutInflater.java
++++ b/core/java/android/view/LayoutInflater.java
+@@ -804,67 +804,75 @@ public abstract class LayoutInflater {
+             throws ClassNotFoundException, InflateException {
+         Objects.requireNonNull(viewContext);
+         Objects.requireNonNull(name);
+-        Constructor<? extends View> constructor = sConstructorMap.get(name);
+-        if (constructor != null && !verifyClassLoader(constructor)) {
+-            constructor = null;
+-            sConstructorMap.remove(name);
+-        }
++        String prefixedName = prefix != null ? (prefix + name) : name;
+         Class<? extends View> clazz = null;
+ 
+         try {
+             Trace.traceBegin(Trace.TRACE_TAG_VIEW, name);
+ 
+-            if (constructor == null) {
+-                // Class not found in the cache, see if it's real, and try to add it
+-                clazz = Class.forName(prefix != null ? (prefix + name) : name, false,
+-                        mContext.getClassLoader()).asSubclass(View.class);
+-
+-                if (mFilter != null && clazz != null) {
+-                    boolean allowed = mFilter.onLoadClass(clazz);
+-                    if (!allowed) {
+-                        failNotAllowed(name, prefix, viewContext, attrs);
+-                    }
++            // Opportunistically create view directly instead of using reflection
++            View view = tryCreateViewDirect(prefixedName, viewContext, attrs);
++            if (view == null) {
++                Constructor<? extends View> constructor = sConstructorMap.get(name);
++                if (constructor != null && !verifyClassLoader(constructor)) {
++                    constructor = null;
++                    sConstructorMap.remove(name);
+                 }
+-                constructor = clazz.getConstructor(mConstructorSignature);
+-                constructor.setAccessible(true);
+-                sConstructorMap.put(name, constructor);
+-            } else {
+-                // If we have a filter, apply it to cached constructor
+-                if (mFilter != null) {
+-                    // Have we seen this name before?
+-                    Boolean allowedState = mFilterMap.get(name);
+-                    if (allowedState == null) {
+-                        // New class -- remember whether it is allowed
+-                        clazz = Class.forName(prefix != null ? (prefix + name) : name, false,
+-                                mContext.getClassLoader()).asSubclass(View.class);
+-
+-                        boolean allowed = clazz != null && mFilter.onLoadClass(clazz);
+-                        mFilterMap.put(name, allowed);
++
++                if (constructor == null) {
++                    // Class not found in the cache, see if it's real, and try to add it
++                    clazz = Class.forName(prefixedName, false,
++                            mContext.getClassLoader()).asSubclass(View.class);
++
++                    if (mFilter != null && clazz != null) {
++                        boolean allowed = mFilter.onLoadClass(clazz);
+                         if (!allowed) {
+                             failNotAllowed(name, prefix, viewContext, attrs);
+                         }
+-                    } else if (allowedState.equals(Boolean.FALSE)) {
+-                        failNotAllowed(name, prefix, viewContext, attrs);
++                    }
++                    constructor = clazz.getConstructor(mConstructorSignature);
++                    constructor.setAccessible(true);
++                    sConstructorMap.put(name, constructor);
++                } else {
++                    // If we have a filter, apply it to cached constructor
++                    if (mFilter != null) {
++                        // Have we seen this name before?
++                        Boolean allowedState = mFilterMap.get(name);
++                        if (allowedState == null) {
++                            // New class -- remember whether it is allowed
++                            clazz = Class.forName(prefixedName, false,
++                                    mContext.getClassLoader()).asSubclass(View.class);
++
++                            boolean allowed = clazz != null && mFilter.onLoadClass(clazz);
++                            mFilterMap.put(name, allowed);
++                            if (!allowed) {
++                                failNotAllowed(name, prefix, viewContext, attrs);
++                            }
++                        } else if (allowedState.equals(Boolean.FALSE)) {
++                            failNotAllowed(name, prefix, viewContext, attrs);
++                        }
+                     }
+                 }
+-            }
+ 
+-            Object lastContext = mConstructorArgs[0];
+-            mConstructorArgs[0] = viewContext;
+-            Object[] args = mConstructorArgs;
+-            args[1] = attrs;
++                Object lastContext = mConstructorArgs[0];
++                mConstructorArgs[0] = viewContext;
++                Object[] args = mConstructorArgs;
++                args[1] = attrs;
+ 
+-            try {
+-                final View view = constructor.newInstance(args);
+-                if (view instanceof ViewStub) {
+-                    // Use the same context when inflating ViewStub later.
+-                    final ViewStub viewStub = (ViewStub) view;
+-                    viewStub.setLayoutInflater(cloneInContext((Context) args[0]));
++                try {
++                    view = constructor.newInstance(args);
++                } finally {
++                    mConstructorArgs[0] = lastContext;
+                 }
+-                return view;
+-            } finally {
+-                mConstructorArgs[0] = lastContext;
+             }
++
++            if (view instanceof ViewStub) {
++                // Use the same context when inflating ViewStub later.
++                final ViewStub viewStub = (ViewStub) view;
++                viewStub.setLayoutInflater(cloneInContext((Context) viewContext));
++            }
++
++            return view;
+         } catch (NoSuchMethodException e) {
+             final InflateException ie = new InflateException(
+                     getParserStateDescription(viewContext, attrs)
+@@ -1363,4 +1371,121 @@ public abstract class LayoutInflater {
+             }
+         }
+     }
++
++    // Some of the views included here are deprecated, but apps still use them.
++    @SuppressWarnings("deprecation")
++    private static View tryCreateViewDirect(String name, Context context, AttributeSet attributeSet) {
++        // This contains all the framework views used in a set of 113 real-world apps, sorted by
++        // number of occurrences. While views with only 1 occurrence are unlikely to be worth
++        // optimizing, it doesn't hurt to include them because switch-case is compiled into a table
++        // lookup after calling String#hashCode().
++        switch (name) {
++            case "android.widget.LinearLayout": // 13486 occurrences
++                return new android.widget.LinearLayout(context, attributeSet);
++            case "android.widget.View": // 6930 occurrences
++            case "android.webkit.View": // 63 occurrences
++            case "android.view.View": // 63 occurrences
++            case "android.app.View": // 62 occurrences
++                return new android.view.View(context, attributeSet);
++            case "android.widget.FrameLayout": // 6447 occurrences
++                return new android.widget.FrameLayout(context, attributeSet);
++            case "android.widget.ViewStub": // 5613 occurrences
++            case "android.view.ViewStub": // 228 occurrences
++            case "android.app.ViewStub": // 227 occurrences
++            case "android.webkit.ViewStub": // 226 occurrences
++                return new android.view.ViewStub(context, attributeSet);
++            case "android.widget.TextView": // 4722 occurrences
++                return new android.widget.TextView(context, attributeSet);
++            case "android.widget.ImageView": // 3044 occurrences
++                return new android.widget.ImageView(context, attributeSet);
++            case "android.widget.RelativeLayout": // 2665 occurrences
++                return new android.widget.RelativeLayout(context, attributeSet);
++            case "android.widget.Space": // 1694 occurrences
++                return new android.widget.Space(context, attributeSet);
++            case "android.widget.ProgressBar": // 770 occurrences
++                return new android.widget.ProgressBar(context, attributeSet);
++            case "android.widget.Button": // 382 occurrences
++                return new android.widget.Button(context, attributeSet);
++            case "android.widget.ImageButton": // 265 occurrences
++                return new android.widget.ImageButton(context, attributeSet);
++            case "android.widget.Switch": // 145 occurrences
++                return new android.widget.Switch(context, attributeSet);
++            case "android.widget.DateTimeView": // 117 occurrences
++                return new android.widget.DateTimeView(context, attributeSet);
++            case "android.widget.Toolbar": // 86 occurrences
++                return new android.widget.Toolbar(context, attributeSet);
++            case "android.widget.HorizontalScrollView": // 68 occurrences
++                return new android.widget.HorizontalScrollView(context, attributeSet);
++            case "android.widget.ScrollView": // 67 occurrences
++                return new android.widget.ScrollView(context, attributeSet);
++            case "android.widget.NotificationHeaderView": // 65 occurrences
++            case "android.webkit.NotificationHeaderView": // 65 occurrences
++            case "android.view.NotificationHeaderView": // 65 occurrences
++            case "android.app.NotificationHeaderView": // 65 occurrences
++                return new android.view.NotificationHeaderView(context, attributeSet);
++            case "android.widget.ListView": // 58 occurrences
++                return new android.widget.ListView(context, attributeSet);
++            case "android.widget.QuickContactBadge": // 50 occurrences
++                return new android.widget.QuickContactBadge(context, attributeSet);
++            case "android.widget.SeekBar": // 40 occurrences
++                return new android.widget.SeekBar(context, attributeSet);
++            case "android.widget.CheckBox": // 38 occurrences
++                return new android.widget.CheckBox(context, attributeSet);
++            case "android.widget.GridLayout": // 16 occurrences
++                return new android.widget.GridLayout(context, attributeSet);
++            case "android.widget.TableRow": // 15 occurrences
++                return new android.widget.TableRow(context, attributeSet);
++            case "android.widget.RadioGroup": // 15 occurrences
++                return new android.widget.RadioGroup(context, attributeSet);
++            case "android.widget.Chronometer": // 15 occurrences
++                return new android.widget.Chronometer(context, attributeSet);
++            case "android.widget.ViewFlipper": // 13 occurrences
++                return new android.widget.ViewFlipper(context, attributeSet);
++            case "android.widget.Spinner": // 9 occurrences
++                return new android.widget.Spinner(context, attributeSet);
++            case "android.widget.ViewSwitcher": // 8 occurrences
++                return new android.widget.ViewSwitcher(context, attributeSet);
++            case "android.widget.TextSwitcher": // 8 occurrences
++                return new android.widget.TextSwitcher(context, attributeSet);
++            case "android.widget.SurfaceView": // 8 occurrences
++            case "android.webkit.SurfaceView": // 1 occurrence
++            case "android.view.SurfaceView": // 1 occurrence
++            case "android.app.SurfaceView": // 1 occurrence
++                return new android.view.SurfaceView(context, attributeSet);
++            case "android.widget.CheckedTextView": // 8 occurrences
++                return new android.widget.CheckedTextView(context, attributeSet);
++            case "android.preference.PreferenceFrameLayout": // 8 occurrences
++                return new android.preference.PreferenceFrameLayout(context, attributeSet);
++            case "android.widget.TwoLineListItem": // 7 occurrences
++                return new android.widget.TwoLineListItem(context, attributeSet);
++            case "android.widget.TableLayout": // 5 occurrences
++                return new android.widget.TableLayout(context, attributeSet);
++            case "android.widget.EditText": // 5 occurrences
++                return new android.widget.EditText(context, attributeSet);
++            case "android.widget.TabWidget": // 3 occurrences
++                return new android.widget.TabWidget(context, attributeSet);
++            case "android.widget.TabHost": // 3 occurrences
++                return new android.widget.TabHost(context, attributeSet);
++            case "android.widget.ZoomButton": // 2 occurrences
++                return new android.widget.ZoomButton(context, attributeSet);
++            case "android.widget.TextureView": // 2 occurrences
++            case "android.webkit.TextureView": // 2 occurrences
++            case "android.app.TextureView": // 2 occurrences
++            case "android.view.TextureView": // 2 occurrences
++                return new android.view.TextureView(context, attributeSet);
++            case "android.widget.ExpandableListView": // 2 occurrences
++                return new android.widget.ExpandableListView(context, attributeSet);
++            case "android.widget.ViewAnimator": // 1 occurrence
++                return new android.widget.ViewAnimator(context, attributeSet);
++            case "android.widget.TextClock": // 1 occurrence
++                return new android.widget.TextClock(context, attributeSet);
++            case "android.widget.AutoCompleteTextView": // 1 occurrence
++                return new android.widget.AutoCompleteTextView(context, attributeSet);
++            case "android.widget.WebView": // 1 occurrence
++            case "android.webkit.WebView": // 1 occurrence
++                return new android.webkit.WebView(context, attributeSet);
++        }
++
++        return null;
++    }
+ }
+diff --git a/core/java/android/view/ViewConfiguration.java b/core/java/android/view/ViewConfiguration.java
+index 638b8f9f9b40..a6c53da8e005 100644
+--- a/core/java/android/view/ViewConfiguration.java
++++ b/core/java/android/view/ViewConfiguration.java
+@@ -74,7 +74,7 @@ public class ViewConfiguration {
+      * a long press
+      * @hide
+      */
+-    public static final int DEFAULT_LONG_PRESS_TIMEOUT = 400;
++    public static final int DEFAULT_LONG_PRESS_TIMEOUT = 250;
+ 
+     /**
+      * Defines the default duration in milliseconds between the first tap's up event and the second
+@@ -92,7 +92,7 @@ public class ViewConfiguration {
+      * appropriate button to bring up the global actions dialog (power off,
+      * lock screen, etc).
+      */
+-    private static final int GLOBAL_ACTIONS_KEY_TIMEOUT = 500;
++    private static final int GLOBAL_ACTIONS_KEY_TIMEOUT = 250;
+ 
+     /**
+      * Defines the duration in milliseconds a user needs to hold down the
+@@ -124,7 +124,7 @@ public class ViewConfiguration {
+      * is a jump tap. If the user does not complete the jump tap within this interval, it is
+      * considered to be a tap.
+      */
+-    private static final int JUMP_TAP_TIMEOUT = 500;
++    private static final int JUMP_TAP_TIMEOUT = 250;
+ 
+     /**
+      * Defines the duration in milliseconds between the first tap's up event and
+@@ -158,12 +158,12 @@ public class ViewConfiguration {
+      * Defines the duration in milliseconds we want to display zoom controls in response
+      * to a user panning within an application.
+      */
+-    private static final int ZOOM_CONTROLS_TIMEOUT = 3000;
++    private static final int ZOOM_CONTROLS_TIMEOUT = 1500;
+ 
+     /**
+      * Inset in dips to look for touchable content when the user touches the edge of the screen
+      */
+-    private static final int EDGE_SLOP = 12;
++    private static final int EDGE_SLOP = 6;
+ 
+     /**
+      * Distance a touch can wander before we think the user is scrolling in dips.
+@@ -222,7 +222,7 @@ public class ViewConfiguration {
+     /**
+      * Maximum velocity to initiate a fling, as measured in dips per second
+      */
+-    private static final int MAXIMUM_FLING_VELOCITY = 8000;
++    private static final int MAXIMUM_FLING_VELOCITY = 16000;
+ 
+     /**
+      * Delay before dispatching a recurring accessibility event in milliseconds.
+@@ -243,7 +243,7 @@ public class ViewConfiguration {
+      * The coefficient of friction applied to flings/scrolls.
+      */
+     @UnsupportedAppUsage
+-    private static final float SCROLL_FRICTION = 0.015f;
++    private static final float SCROLL_FRICTION = 0.012f;
+ 
+     /**
+      * Max distance in dips to overscroll for edge effects
+diff --git a/core/java/android/view/ViewRootImpl.java b/core/java/android/view/ViewRootImpl.java
+index 540806d3f065..fc409cae4195 100644
+--- a/core/java/android/view/ViewRootImpl.java
++++ b/core/java/android/view/ViewRootImpl.java
+@@ -7502,7 +7502,7 @@ public final class ViewRootImpl implements ViewParent,
+         // probably not be set to anything less than about 4.
+         // If fling accuracy is a problem then consider tuning the tick distance instead.
+         private static final float MIN_FLING_VELOCITY_TICKS_PER_SECOND = 6f;
+-        private static final float MAX_FLING_VELOCITY_TICKS_PER_SECOND = 20f;
++        private static final float MAX_FLING_VELOCITY_TICKS_PER_SECOND = 24f;
+ 
+         // Fling velocity decay factor applied after each new key is emitted.
+         // This parameter controls the deceleration and overall duration of the fling.
+diff --git a/core/java/android/widget/AbsListView.java b/core/java/android/widget/AbsListView.java
+index 0b0bfb1ddbe9..e714c28aa58c 100644
+--- a/core/java/android/widget/AbsListView.java
++++ b/core/java/android/widget/AbsListView.java
+@@ -684,6 +684,7 @@ public abstract class AbsListView extends AdapterView<ListAdapter> implements Te
+     private int mMinimumVelocity;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 124051740)
+     private int mMaximumVelocity;
++    private int mDecacheThreshold;
+     private float mVelocityScale = 1.0f;
+ 
+     final boolean[] mIsScrap = new boolean[1];
+@@ -994,6 +995,7 @@ public abstract class AbsListView extends AdapterView<ListAdapter> implements Te
+         mVerticalScrollFactor = configuration.getScaledVerticalScrollFactor();
+         mMinimumVelocity = configuration.getScaledMinimumFlingVelocity();
+         mMaximumVelocity = configuration.getScaledMaximumFlingVelocity();
++        mDecacheThreshold = mMaximumVelocity / 2;
+         mOverscrollDistance = configuration.getScaledOverscrollDistance();
+         mOverflingDistance = configuration.getScaledOverflingDistance();
+ 
+@@ -4811,7 +4813,7 @@ public abstract class AbsListView extends AdapterView<ListAdapter> implements Te
+                     // Keep the fling alive a little longer
+                     postDelayed(this, FLYWHEEL_TIMEOUT);
+                 } else {
+-                    endFling();
++                    endFling(false); // Don't disable the scrolling cache right after it was enabled
+                     mTouchMode = TOUCH_MODE_SCROLL;
+                     reportScrollStateChange(OnScrollListener.SCROLL_STATE_TOUCH_SCROLL);
+                 }
+@@ -4822,11 +4824,16 @@ public abstract class AbsListView extends AdapterView<ListAdapter> implements Te
+ 
+         FlingRunnable() {
+             mScroller = new OverScroller(getContext());
++            mScroller.setFriction(0.006f);
+         }
+ 
+         // Use AbsListView#fling(int) instead
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+         void start(int initialVelocity) {
++            if (Math.abs(initialVelocity) > mDecacheThreshold) {
++                // For long flings, scrolling cache causes stutter, so don't use it
++                clearScrollingCache();
++            }
+             int initialY = initialVelocity < 0 ? Integer.MAX_VALUE : 0;
+             mLastFlingY = initialY;
+             mScroller.setInterpolator(null);
+@@ -4907,6 +4914,9 @@ public abstract class AbsListView extends AdapterView<ListAdapter> implements Te
+         // To interrupt a fling early you should use smoothScrollBy(0,0) instead
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+         void endFling() {
++           endFling(true);
++        }
++        void endFling(boolean clearCache) {
+             mTouchMode = TOUCH_MODE_REST;
+ 
+             removeCallbacks(this);
+@@ -4915,7 +4925,8 @@ public abstract class AbsListView extends AdapterView<ListAdapter> implements Te
+             if (!mSuppressIdleStateChangeCall) {
+                 reportScrollStateChange(OnScrollListener.SCROLL_STATE_IDLE);
+             }
+-            clearScrollingCache();
++            if (clearCache)
++                clearScrollingCache();
+             mScroller.abortAnimation();
+ 
+             if (mFlingStrictSpan != null) {
+diff --git a/core/java/android/widget/ScrollView.java b/core/java/android/widget/ScrollView.java
+index 15cd17b20f4f..e3e86974bd0f 100644
+--- a/core/java/android/widget/ScrollView.java
++++ b/core/java/android/widget/ScrollView.java
+@@ -349,6 +349,7 @@ public class ScrollView extends FrameLayout {
+ 
+     private void initScrollView() {
+         mScroller = new OverScroller(getContext());
++        mScroller.setFriction(0.006f);
+         setFocusable(true);
+         setDescendantFocusability(FOCUS_AFTER_DESCENDANTS);
+         setWillNotDraw(false);
+diff --git a/core/java/com/android/internal/notification/SystemNotificationChannels.java b/core/java/com/android/internal/notification/SystemNotificationChannels.java
+index 681b46a01c8d..89e6d1f50307 100644
+--- a/core/java/com/android/internal/notification/SystemNotificationChannels.java
++++ b/core/java/com/android/internal/notification/SystemNotificationChannels.java
+@@ -113,7 +113,7 @@ public class SystemNotificationChannels {
+         final NotificationChannel developerImportant = new NotificationChannel(
+                 DEVELOPER_IMPORTANT,
+                 context.getString(R.string.notification_channel_developer_important),
+-                NotificationManager.IMPORTANCE_HIGH);
++                NotificationManager.IMPORTANCE_MIN);
+         developer.setBlockable(true);
+         channelsList.add(developerImportant);
+ 
+diff --git a/core/java/com/android/server/LocalServices.java b/core/java/com/android/server/LocalServices.java
+index 9c632ea725a9..ca94bb08afc0 100644
+--- a/core/java/com/android/server/LocalServices.java
++++ b/core/java/com/android/server/LocalServices.java
+@@ -18,7 +18,7 @@ package com.android.server;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+ 
+-import android.util.ArrayMap;
++import java.util.HashMap;
+ 
+ /**
+  * This class is used in a similar way as ServiceManager, except the services registered here
+@@ -32,8 +32,8 @@ import android.util.ArrayMap;
+ public final class LocalServices {
+     private LocalServices() {}
+ 
+-    private static final ArrayMap<Class<?>, Object> sLocalServiceObjects =
+-            new ArrayMap<Class<?>, Object>();
++    private static final HashMap<Class<?>, Object> sLocalServiceObjects =
++            new HashMap<Class<?>, Object>();
+ 
+     /**
+      * Returns a local service instance that implements the specified interface.
+diff --git a/core/res/res/drawable-hdpi/stat_sys_upload_anim1.png b/core/res/res/drawable-hdpi/stat_sys_upload_anim1.png
+index 3a9031e8e0049a070a430fec573096bea31817b2..c27f30bd392378b5654f96cde436defd66b44a15 100644
+GIT binary patch
+delta 202
+zcmV;*05$*m1ls|S8Gi-<007|tn3w<n0HR4mK~#9!?bksIKrk4_aZ;2EDK`gq2TAQf
+zvhV+;=22T|C1f^-=dFKk-d|!RiZ~udDHWq;zy1M}pdLxo1w~<biUy652UHRQlObVY
+zOoLYxmgQ(V!T3dCNrC1Ij2{$kUZLeC#x(Bl+83A_tq(CK;X@Rq&lveK@yV02pzX=>
+zHq<#p5J3bHL=Zs)IR=#)Wmod&ki&WLNjr%k=OB)r4Ij&NN?rYPOaK4?07*qoM6N<$
+Ef>=mWw*UYD
+
+literal 634
+zcmeAS@N?(olHy`uVBq!ia0vp^Dj>|k0wldT1B8JTQ<As43&a2R{xkc5JkA1-$YKTt
+zZXpn6ymYtj4@j`Az%d<2gY`00uuJzdFfhh>x;Tb-9Dh4?qu*fzfwukLbGC6z<vYN#
+z%4Id5jhz2MXD3y*8xC4acqW(}f22~{`F6`Iws~`Y{5xO%e6v3X&sy~$|D)O3wg!7y
+zJo$Z2sb)&NXU%n;RCIXGOUHR;5~|6^T7(X3`-jxcWHDqGn-ip@(I)C`X19>VKwU>-
+z(?&DhQ}Y(KI7H7dEZ)TSc#+kSOO1>(4Ad9iy6It9vtda`gVYsE;{{pV8#jjWWXt{F
+zYfB3i_X+$x(PClfwblM|nvWMsint1Rt=q9|L+gh#-Lc*)R>W+4S+IUfMB(K&Ch5S8
+z*C&}jP2GQ9?OC9}?(a+Qmj7w~XL7>j+SR!D+;txt7ffONx_NdRPjYSUnIm@VG~YjQ
+zJXq+q=W^F?=cEN0#oynRK1qn}Z|kWm?VDhqy~S<I@%e!T$8Ga3PCB3!erMA4xyM9%
+z8;m!_-Rrn)Q|=J&aPPFTs`CAHU)RZeJ-cr5;>Er4libR7cV1q|1`Kx564!_l=c3fa
+zlFa-(g^<kLR0czRV?%vILp=%8IY0%fAO$IjC8<`)AXTXhMh1q4x&|h?hK3;qmR5#F
+zR;HG^2If`<29@uBTB2yk%}>cptHiB=W0PYmP=gG}hT#0PlJdl&R0hYC{G?O`x6Go{
+d^8BLgVg=`5)55Kf&4B6{JYD@<);T3K0RR_D@M8b~
+
+diff --git a/core/res/res/drawable-hdpi/stat_sys_upload_anim2.png b/core/res/res/drawable-hdpi/stat_sys_upload_anim2.png
+index 39d2c95ffab217cb2be76664132bc514d0d6d391..65cfe84b9f1e3091aac6485334053094c0337aa4 100644
+GIT binary patch
+delta 220
+zcmV<203-jY1?>Tl8Gi-<007|tn3w<n0JKR&K~#9!?bp2ugD@C{VT(|qOGW7B;NGE#
+zkU=TUCG?VdDc)&3LIM&HHRh+o`QXLP??IwqmT@ACQtE>0`T7r-9KDc4&!i|UzoJ%S
+z<N}qaz!XSW7*iV+g=II?uVCV$u;h-04NM#qZeF4HPK>FW&sACo%maN6Vobs-N`GVI
+z$wZJRWkH*j<xQ&Z5J3bHL=Zs)5#$+EYLs2cpF<Ak#4GJ37tj}tp>hHJRKVdGbe#z;
+W;EtoXO{RJP0000<MNUMnLSTZ<mtlAS
+
+literal 681
+zcmeAS@N?(olHy`uVBq!ia0vp^Dj>|k0wldT1B8JTQ<As43&a2R{xkc5JkA1-$YKTt
+zZXpn6ymYtj4@j`Az%d<2gY`00uuJzdFfjIdx;Tb-9Dh62*YB`_fZKfGcCi3P&WJ{>
+zi>tV=<?Qt6Kd8BbQ~d#hEqg#GYmR`2sOD6K!ZXJ_X9?Z*{26Jet^V!1jj>!c3*Y6R
+z4o{pDW3{Ccq&S<{W=wE)GQY<a)ur;JMe*-e8(o809gMq|c+A_WzWH>E@aBUZxj`&a
+zCwnwcsfqBNQB$_k*u2bTrm=|L1)*ifC#*OS5@?zf*vxn%)x%-iripH!PE9$&tQGK^
+zr(uoGk)*9|M$f15r)Rj8I>_hRHF;&s{P?QZI;cKFsMk%w!}8ILBO-^G`_uFklvj79
+z_ExVv*p+qbLW7Xhsj5v4IZyMWAAdg4nOmEA`<DHQ{7c6A6EccTkCZ!b&pVULAGwB`
+zD`1Xsnp;OwzxF!LQ|?P-U-TGq3UUgX>s^?y63r;Qt%Ec0%ZwTI`?L4?Nl#fTxb+v?
+z)uugX@9qk>_WXRo#G(D&^m7kCrT3i^e7e$AC8pqH_x4+crzDpjsa(FYYu5q3K;?Xw
+zrIqU%?ltb1=sv5X;-~4l(}9=YgcW^B{>CX{(=7L~yyPM<mPAWjBTAf$QWHxu^Yau!
+zGILWI4E2o-^$iX6BuwW36{vy~q$HN4S|x*2r7{>97#ivtSm+v<h8S8{nOImE8S5ID
+zTNxNQy|CGeq9HdwB{QuOw+7>_Eu26NG9Vj*^V3So6N^$A98>a>QWe}Xi&D$;i?WLq
+XoP$jZw>~xls$=kU^>bP0l+XkK&}{oZ
+
+diff --git a/core/res/res/drawable-mdpi/stat_sys_upload_anim1.png b/core/res/res/drawable-mdpi/stat_sys_upload_anim1.png
+index 217ea4eb65792077bcc28d23bc634406e1f68f26..09982a9bb473deeea8979cd27dce6b307ab6768b 100644
+GIT binary patch
+delta 204
+zcmV;-05kug1l<9U8Gi-<007{3J@^0s0HjGoK~#9!V_+Ce;Q#;sj6f_vE5liVSPO`4
+zfLIh{88r=O0b+e1wg+Mds3o#gu>@!c2M`-U4MxVcKrBI#B|yzwKx~S|aAZs5$g%{e
+zi5G~?@fZ%nc0epcvL!$boS+ngg!Rx2Rzi~Fqc}c*256vJAVop#WIAfWs0Bm70%ah!
+zK*FN5D6Tn>Ff+r*1kfT{fLu&YY9R>|V*#iFF(4PyJ;(uy-STD=ly5Nr0000<MNUMn
+GLSTabrA<Qs
+
+literal 545
+zcmeAS@N?(olHy`uVBq!ia0vp^5+KaM0wlfaz7_*1rX+877l!}s{b%+Ad7K3vkw8&y
+zArNM~bhqvgNU*HHF&#*Q^)giWEM3OHz{u+9;uvCa`sk#+euoW2TKB(>PzViKl$6B8
+zIkk0e`!n7dl>!<<NehI6GNzk+OUzhwWS#Pq&c`ROKY#w~mK)nsR-KzWIjfE?dY<LA
+z;NgiK4;w|Trbax=<v1>@&2&sU`b|a3$^@71Ya%ZtH9R(*eq)E~gC0}vLnjIjUoSbt
+z`hAXYN9@7GkUgIb18U8hcqg7P^=1;Cf2HDpV0D*&Q`Q8<bp{7+1Sd~Bb2WXsp2Nwd
+zmsuM9Tr!)I)&2!9uw;52#<)*|W6PGm@~8HC&E2t1F3@kI;K`+{js&zU`hVX-P2$nS
+z=vkcHiyzKB{6Trog~>~ry*eiCE7eT-J4NY3)AROKKa@nRXZ?K3{DFIaa86%POu7It
+zbVN&BBTAf$QWHxu^Yau!GILWI4E2o-^$iX6BuwW36{vy~q$HN4S|x*2r7{>97#ivt
+znCKcBh8S2{85&ucTIw2@TNxNszW-^7q9HdwB{QuOw+4<)j;%lqG9Vj*^V3So6N^$A
+n98>a>QWe}Xi&D$;i?WLqoP$jZw>~xls$=kU^>bP0l+XkK!nVtw
+
+diff --git a/core/res/res/drawable-mdpi/stat_sys_upload_anim2.png b/core/res/res/drawable-mdpi/stat_sys_upload_anim2.png
+index b9c364c92b15650f57442a42726b99e1fbc8e13e..ed9033ff4b6f50c24c9761edf7335c53b8e4bdb1 100644
+GIT binary patch
+delta 208
+zcmV;>05AW+1mOXY8Gi-<007{3J@^0s0H{esK~#9!V_+Ce;Q#;sj6f_vE5liVSPO`4
+zfLIh{88r=O0b+e1wg+Mds3o#gu>@!c2M`-U4MxVcKrBI#B|yzwKx~S|aAZs5$g%{e
+zi5G~?@fZ%nc0epcvL!$boS+ngg!Rx2Rzi~Fqc}c*256vJAW1>(WIAfWs0Bm70%ah!
+zK*FN5D6Tn>Ff+r*1kfT{fLu(B1))IPK`ti7f(jtsPcEi=kOKgYN&kkhR6m9Q0000<
+KMNUMnLSTZKiBPTp
+
+literal 577
+zcmeAS@N?(olHy`uVBq!ia0vp^5+KaM0wlfaz7_*1rX+877l!}s{b%+Ad7K3vkw8&y
+zArNM~bhqvgNU*HHF&#*Q^)giWEM3OHz^Ll!;uvCadg|n}eoTfUt^04UoFU+;ur4Mu
+zso?QF_K&i6f3U5q6*$_m<3bBds<BUX%z*=2N|ffr-u_(tJ~ulhU|*xE_I2m=65C?F
+za&ECVTDLR3iBEM}rSze~(=81j&zWzt+!S(QVfC_}41)t7r+Kf57BWaUHQ|EcoR3%M
+z7aWv*&hn`2aAHV}!TsP`vnI)jCq$K*MCa>#Y*5}NGM`1)v2Di@hUB9{n^V@=W$$88
+z^<B=%B-?R`<#?wCcg}5R#(f$bCMIuNWtAn2mZcrIDQJ3%+txG6qe|qI&S_hg1q;7e
+z@=0G_wuDjecvq?4&Hd%qJ-K&pe^O?*@Wp?7GtRb(2W`8KA6ilQa*DeC7oE(tLW`EP
+z9&@^O&zU9e<DY=3YQ9JHzrK9R{DFPfg1U}Ab7OsA=!urNMwB=gr6!hS=I1GdWag$a
+z80s4v>KhvBNtn(7Do_O}NJ%V7wMqu5N@XxIFf`OPFwr$M3^A~@GBmO>wbV5*w=yuO
+zeE-uDMMG|WN@iLmZVeop99w}JWI#3q=ckpFCl;kLIHu$$r7E~(7NwTw7iAYKI0u^+
+TZhdS9RL9`y>gTe~DWM4fUN6&j
+
+diff --git a/core/res/res/drawable-xhdpi/stat_sys_upload_anim1.png b/core/res/res/drawable-xhdpi/stat_sys_upload_anim1.png
+index e443f4573f1ae70b8f7c678343f26465ddb73caf..b4782e96e9eb6f8481921a8e1d2bc7a3f3579872 100644
+GIT binary patch
+delta 269
+zcmV+o0rLL$1)Tzr8Gi-<00374`G)`i0OUzTK~#9!?U=C&!Y~v?t0+2D5!}oqE`oy{
+ziYQ9W|Nm6Ifdqm>YN<_L%6)J~%Q+@Zphdx%__S?1%UOO7&Y;XuehscbgGW{okX?b=
+z$~*2^L_l%_ZeQ}+TZz5c_X1)&E2#rKO@u^w^UuCI<Q<Kem47f2;Lt-}&PsUlO;7ps
+zD`C(0(*SvgSvi$L{s`U!<$aWSZVdS)xcph(Z6_5Y!0h=dK>fp(3H^R6;VuXTRMKx^
+z1~7mD3}65Q7{CAqFn|FJU;u~1;c!Hp>t)BMz)^{DF^viXrVy~O5lP@FBz->Fd|M}D
+T(@mBD0000<MFvhpu0mjfK^k-u
+
+literal 759
+zcmeAS@N?(olHy`uVBq!ia0vp^1|ZDA0wn)(8}a}trX+877l!}s{b%+Ad7K3vk;M!Q
+z+(IDCc<FB4ACO>Kfnz$52J2-w_pT?Lfr0V1r;B4q#NoHoeEp;y1zPvN+UWQ=Lc^&m
+zK!C|9qOeIuMS9zuM&V~tf{KakIUOPo6RLluK0G*2zG_*zjF^Ys>21f>RjrTzyM=3!
+zZ$rR8+3ahqcKrd<FL*G0<tvkYD0{qT{>Ee>QOAH2Cnf}c`*DWjXwa5bF^9T!{UnXm
+z6Hk@P&0n4PT0rE1`<w}r5;=gX|MV@~5cYxf&kW&hCyVMIeuz05utiwnk?nks53KnQ
+z1;TB%1V$+TV5*y*9K*S<xhsvy`AuO5zufuH&FyL%#Ot)T-n0A7yLX4j72fZOqRg}2
+zH1ww&Jk0Sy!u>!khtisa6N2(5rrGVAq@jHBF7IRU?LYFk$_no29XulT*lAObX1&3b
+z{q8x&FPAOwt2kC-$?p7aM_(hihC#>|Gnb&mvKy~n@y*ZvAXM>hW$2ofV)~OeT)VCJ
+zYFFHGGZyJ4-h*uqas`j%zfqNTsgC*=W&1y!X`-l^HTOEBt;Md1(wkmAN)2+U5NF-H
+z>cgwpFW=UNs3x9xDjgj^Tk`0m>)mgXr47!VV&RmG-=Xq)?W0cac}@Sb7_6>Wed7!9
+zsIhewRy!l{E#yPQ+-X*hUS7AXpJtZsIL#vYp?Cd{d(0Nk^_R}xes9@c{{2lkdBM@e
+ze9xX9ua_~qm@Isj<2^9WMN3>GN}P*Q6H7Al^Atidb5j`%^^Fbn4Gr}qOy>X<sDc!v
+zB$lLFC4*F@G8h>c8tNLD=o%V^7+6{v8d;fI>Kd3^85mT)|7nS$AvZrIGp!Q0298aR
+ztw0SjARB`7(@M${i&7aJQ}UBi72Gn5Qp@v;vWpd*gG~#!J~jiYWAJqKb6Mw<&;$Ut
+CEi6p{
+
+diff --git a/core/res/res/drawable-xhdpi/stat_sys_upload_anim2.png b/core/res/res/drawable-xhdpi/stat_sys_upload_anim2.png
+index cd0ca73608da73702fea688c170aa2af8ed1bee6..677d429cf9b18b8f85e028e40cfe9c3f97053de4 100644
+GIT binary patch
+delta 278
+zcmV+x0qOp(2Brd#8Gi-<00374`G)`i0PRUcK~#9!?U=C&!Y~v?s~|d55!~z~E`oy{
+ziYQ9$|1W-0y$>1)4ymPS@*?-b9b3-nOA|<zF@K)6ZD%RN&(RZ_rwG47FKC0_lac`J
+z60JIT(_0b}fLx>3FZjlq#7^yh0kCZc**N+T361dbWuHCprhm1XNeBeG9{{gs5*B<t
+z5I+7Sx;_3l0^U?6SHyrnps$heb_;oL2>1nh_6%>9QxQTy)_mz`^}~{JJ-^X#7PtgT
+z?I$q>C_n)UP=Epypa2CZKmiI+fMFPhQL(S*Jy(H~HpIa+X?+ODW$imweF(^xh!!p(
+cX5xGRAkm4*unz>wS^xk507*qoM6N<$g5fN4V*mgE
+
+literal 814
+zcmeAS@N?(olHy`uVBq!ia0vp^1|ZDA0wn)(8}a}trX+877l!}s{b%+Ad7K3vk;M!Q
+z+(IDCc<FB4ACO>Kfnz$52J2-w_pT=#s7=Vz#W5t}@Y`u;^DYMnwC?}t-|XBXAhc?Q
+zfbLT5c@4)C4z}r@KVbb)ZV#JQ{q9S?jaq7jZw@Q1dt4uH{pN(n&-s?==XMsq=e1~O
+zSor6vX%0_K+(N^peJrzL-t@M7w@5B*f15Og+41DW3EX{^2W55!@vPE$a8yuS=f;E0
+z&xB9!zPh27!|OxwxlRwm7WYHpb-My?DEttsJ7{Tq$tJ!cC1zIukFdle#q%Fedfhza
+z98+ZMlDPLl^bhwr4?`cguXv$uaK!NZ39H+uf1L4^k2qaE^`iB|CFx?@-D;ojigtB~
+zw|UB$nQqKv)D!$*7x$uQ#}k_Up51fSq)mDF{AJt6UhPeVTyhTzLmN7k#Z))<m~NLi
+zC10F&<gtheXZ$9;Z;mJU_w6`Ps$mdv&a5Rq`P+uO7w_H;zrZ%nK07=+>&j`BoDW-y
+zt=4_-WIovVz`>yJfYy7N|C?CzG8;U)vx6g^>zdCzknR^`<(sc=dF^5iL)F@d{UX|7
+zYwmY_Wfb`r&HA0=bF|Lk<Y!^e_MK1`E1T8SqRJT^Y{v3dJf%9mS&`?bX>d^V$%S|3
+zE?9b{^}t;vse0M}lUJM&Yui(EZMj=e?CfV!DeIQ^M2B$J1jT)vSF))~^nFC>zf}xh
+z!hRpE4LJE@nX6&p#^mG2H`(p;ZR+UA*z`28_I)U4&;#ZC6Ke5GrT+!oY&mN<_s$=_
+zP4zyx=W92ttoy?)#Pv>M;pZE^z@#Et;u=xnT$Gwvl9`{U5R#dj%3!E(Y^ZN&s3&1M
+z2dF?5q#z}+B-JVzq$-uc$iUE0*T6*A&@jZn(#p`t%G6TVz}(8fpz{4sOB4;c`6-!c
+zmAEx<Y;tS`YLEfh5S*V@Ql40p%HWuipOmWLmRXcqo?nz*tl%7MTDbMG8BiUAr>mdK
+II;Vst0FBX65C8xG
+
+diff --git a/core/res/res/drawable-xxhdpi/stat_sys_upload_anim1.png b/core/res/res/drawable-xxhdpi/stat_sys_upload_anim1.png
+index b828430b766a4e39ad19b7c2ecf0b9b0eb9715ef..7a7c63f092022da6cd42476befeb67dceee61065 100644
+GIT binary patch
+delta 3152
+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
+
+literal 624
+zcmeAS@N?(olHy`uVBq!ia0vp^9w5xY1|&n@ZgvM!EX7WqAsj$Z!;#Vf<Z~8yL>4nJ
+za0`Jj<E6WGe}IBAC9V-A!TD(=<%vb942~)JNvR5MnMJAP`9;~q3eLf%g<Bt+0o93u
+z)HxTWCYEI8=P86_=B6?j>KhyC8yf0Kn9gBfU_9yR;uumf=j|O|ufqW%M?V&aws18C
+z6sWPZlrg@m=gd10X#OC?{i)T9?vx7!HP^q3TGSUj^FDNbwi)NzXYT@D-~D3Oa8X#m
+z(_zW(6H3O~wKDs6{?5I1eCGqR!`bb#7PJ(z6wFyzWzI8UxBY{r&EEFT3cQR{3ix&$
+zIK$g`MK+_cn0Jx&B-gkDUVA-u|CT$zz3#EjZ?*!X&Fdf3DV=60VezsEJ~qj?p`YW@
+zvwKJH{FSV<IFNdZ@8y)7u+N-D-#HK1?P)xqlAG4V^?;#QedS4(rR57b4+MWZckTCQ
+z6<%A%?$wVcSvV~AT*bBJz|D>KdCin<!*12>4c7Ua8qav=xqR4)$un!$$#_>R4pqx2
+zEWN|U&akW`H+0J*hbPw-mK~kwbiVl-SB&iSjH2>2bMtnJ&R*bH@T|)>=>6=g+t2*n
+z$NpV7k}aX(xa?weg-Hz_OiG*`Dr7K9|9)^<{pDe67dGu8yRI^9cv>$xxpe*#PJ{)n
+n`}Mc2RZsixA?zXq3V!+gh-G)oxYjKL#yW$itDnm{r-UW|SoQU{
+
+diff --git a/core/res/res/drawable-xxhdpi/stat_sys_upload_anim2.png b/core/res/res/drawable-xxhdpi/stat_sys_upload_anim2.png
+index 39dd3b800cb5d8214fc8f4240a44af77dfc926f7..9b46812c281866ede808677f4035756cf200a7f1 100644
+GIT binary patch
+delta 3160
+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
+
+literal 641
+zcmeAS@N?(olHy`uVBq!ia0vp^9w5xY1|&n@ZgvM!EX7WqAsj$Z!;#Vf<Z~8yL>4nJ
+za0`Jj<E6WGe}IBAC9V-A!TD(=<%vb942~)JNvR5MnMJAP`9;~q3eLf%g<Bt+0o93u
+z)HxTWCYEI8=P86_=B6?j>KhyC8yf0Kn9gBfV7%q&;uumf=j|O|ufqW%M?V&aws18C
+z6sWPZlrg@m=gd10X#OC?{i)T9Zk8O2eW!nO&9S#Iu6+1Bck;5W&)x;RzWc?l;i9mB
+zr^AxnC*0D)ep%ENf4{xu*v<!bhi~(lI&wbecwpiDHBUmJy#4@d`t-Us2Pr0vhcX3?
+zGo_hUT3=v#F6C0L(rwc?wQ5q?ciRT>nB$S(cps#s#UCtHn$7rvV@koY9^Z2ec1j+z
+zt-E*rHvUx5aC(aDCFf0%XVp*KRcHA9fsbkOmYJMd4a_F<mZ%9&Ip-wYu>8%@Yrns%
+z@Y*_duYNqq!eO!JDy}UDZf?BKYo=@)cB_7Gd&IBP`<Ql|w_g*WZu~pOa@q&K)jk&<
+zz1ktl$Kdnw)~bx7jVHX@Z;85d-Q|zcE+~yzeDdzbZw05<-eBQvG7is~RJA{%_H@j5
+z+Z}!>#th7N-bvUpPGoTr0)~SMag3_{Zzpfv!76_3ww)*__`uq<etn#Nr|6v5-hZVb
+z!dOkyEIG_`VA_5owb#pLt97U-Olt68QsV3o*_-(7xlh1n>sE%l2GV9AC;Vc3_h`fY
+U60eKXfyscu)78&qol`;+0E+hbHvj+t
+
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+index 0539c7677a3f..653e3ff5e2d6 100644
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -138,17 +138,17 @@
+     <bool name="config_disableTransitionAnimation">false</bool>
+ 
+     <!-- The duration (in milliseconds) of a short animation. -->
+-    <integer name="config_shortAnimTime">200</integer>
++    <integer name="config_shortAnimTime">100</integer>
+ 
+     <!-- The duration (in milliseconds) of a medium-length animation. -->
+-    <integer name="config_mediumAnimTime">400</integer>
++    <integer name="config_mediumAnimTime">160</integer>
+ 
+     <!-- The duration (in milliseconds) of a long animation. -->
+-    <integer name="config_longAnimTime">500</integer>
++    <integer name="config_longAnimTime">240</integer>
+ 
+     <!-- The duration (in milliseconds) of the activity open/close and fragment open/close animations. -->
+-    <integer name="config_activityShortDur">150</integer>
+-    <integer name="config_activityDefaultDur">220</integer>
++    <integer name="config_activityShortDur">72</integer>
++    <integer name="config_activityDefaultDur">100</integer>
+ 
+     <!-- Fade out time for screen rotation -->
+     <integer name="config_screen_rotation_fade_out">116</integer>
+@@ -169,7 +169,7 @@
+     <integer name="config_screen_rotation_color_transition">200</integer>
+ 
+     <!-- The duration (in milliseconds) of the tooltip show/hide animations. -->
+-    <integer name="config_tooltipAnimTime">150</integer>
++    <integer name="config_tooltipAnimTime">140</integer>
+ 
+     <!-- Duration for the dim animation behind a dialog.  This may be either
+          a percentage, which is relative to the duration of the enter/open
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/pip/PipTaskOrganizer.java b/libs/WindowManager/Shell/src/com/android/wm/shell/pip/PipTaskOrganizer.java
+index 7da750211b7e..ad67239112a8 100644
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/pip/PipTaskOrganizer.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/pip/PipTaskOrganizer.java
+@@ -722,8 +722,13 @@ public class PipTaskOrganizer implements ShellTaskOrganizer.TaskListener,
+ 
+         if (mOneShotAnimationType == ANIM_TYPE_BOUNDS) {
+             mPipMenuController.attach(mLeash);
+-            final Rect sourceHintRect = PipBoundsAlgorithm.getValidSourceHintRect(
++            Rect sourceHintRect = PipBoundsAlgorithm.getValidSourceHintRect(
+                     info.pictureInPictureParams, currentBounds);
++            if (sourceHintRect != null && currentBounds != null
++                    && sourceHintRect.width() < currentBounds.width() / 2
++                    && sourceHintRect.height() < currentBounds.height() / 3) {
++                sourceHintRect = null;
++            }
+             scheduleAnimateResizePip(currentBounds, destinationBounds, 0 /* startingAngle */,
+                     sourceHintRect, TRANSITION_DIRECTION_TO_PIP, mEnterAnimationDuration,
+                     null /* updateBoundsCallback */);
+diff --git a/libs/hwui/Android.bp b/libs/hwui/Android.bp
+index ad9aa6cdd3d9..648a38280c5a 100644
+--- a/libs/hwui/Android.bp
++++ b/libs/hwui/Android.bp
+@@ -34,7 +34,7 @@ cc_defaults {
+         "hwui_static_deps",
+         "skia_deps",
+         //"hwui_bugreport_font_cache_usage",
+-        //"hwui_compile_for_perf",
++        "hwui_compile_for_perf",
+         "hwui_lto",
+     ],
+ 
+@@ -55,6 +55,10 @@ cc_defaults {
+         // GCC false-positives on this warning, and since we -Werror that's
+         // a problem
+         "-Wno-free-nonheap-object",
++
++        // Do not de-optimise cold code paths in AFDO.
++        // Some code paths might be infrequently executed but critical to latency.
++        "-fno-profile-sample-accurate",
+     ],
+ 
+     include_dirs: [
+@@ -153,9 +157,7 @@ cc_defaults {
+     name: "hwui_compile_for_perf",
+     // TODO: Non-arm?
+     cflags: [
+-        "-fno-omit-frame-pointer",
+-        "-marm",
+-        "-mapcs",
++        "-O3",
+     ],
+ }
+ 
+diff --git a/media/java/android/media/MediaCodec.java b/media/java/android/media/MediaCodec.java
+index 220232d6e38f..c4aa5c116282 100644
+--- a/media/java/android/media/MediaCodec.java
++++ b/media/java/android/media/MediaCodec.java
+@@ -3062,7 +3062,10 @@ final public class MediaCodec {
+                 mValid = false;
+                 mNativeContext = 0;
+             }
+-            sPool.offer(this);
++
++            if (!mInternal) {
++                sPool.offer(this);
++            }
+         }
+ 
+         private native void native_recycle();
+@@ -3126,6 +3129,7 @@ final public class MediaCodec {
+             mNativeContext = context;
+             mMappable = isMappable;
+             mValid = (context != 0);
++            mInternal = true;
+         }
+ 
+         private static final BlockingQueue<LinearBlock> sPool =
+@@ -3136,6 +3140,7 @@ final public class MediaCodec {
+         private boolean mMappable = false;
+         private ByteBuffer mMapped = null;
+         private long mNativeContext = 0;
++        private boolean mInternal = false;
+     }
+ 
+     /**
+diff --git a/packages/SystemUI/res/layout/qs_carrier.xml b/packages/SystemUI/res/layout/qs_carrier.xml
+index a854660f64f8..e71c084529ab 100644
+--- a/packages/SystemUI/res/layout/qs_carrier.xml
++++ b/packages/SystemUI/res/layout/qs_carrier.xml
+@@ -28,14 +28,15 @@
+     android:clipToPadding="false"
+     android:focusable="true" >
+ 
+-    <com.android.systemui.util.AutoMarqueeTextView
++    <TextView
+         android:id="@+id/qs_carrier_text"
+         android:layout_width="wrap_content"
+         android:layout_height="wrap_content"
+         android:layout_weight="1"
++        android:minWidth="150dp"
+         android:textAppearance="@style/TextAppearance.QS.Status.Carriers"
+         android:textDirection="locale"
+-        android:marqueeRepeatLimit="marquee_forever"
++        android:gravity="center_vertical|end"
+         android:singleLine="true"
+         android:maxEms="7"/>
+ 
+@@ -53,4 +54,4 @@
+         android:layout_marginStart="@dimen/qs_carrier_margin_width"
+         android:visibility="gone" />
+ 
+-</com.android.systemui.qs.carrier.QSCarrier>
+\ No newline at end of file
++</com.android.systemui.qs.carrier.QSCarrier>
+diff --git a/packages/SystemUI/res/values/custom_config.xml b/packages/SystemUI/res/values/custom_config.xml
+index 6929fc5f7b23..608d019dad68 100644
+--- a/packages/SystemUI/res/values/custom_config.xml
++++ b/packages/SystemUI/res/values/custom_config.xml
+@@ -32,4 +32,45 @@
+ 
+     <!-- Preferred max refresh rate at AOD & Ambient Display, if supported by the display. -->
+     <integer name="config_aodMaxRefreshRate">-1</integer>
++        <!-- Flag to enable framework dimming for udfps -->
++    <bool name="config_udfpsFrameworkDimming">false</bool>
++
++    <!-- File path to use for getting brightness for framework dimming.
++         If none brightness is retrieved from framework. -->
++    <string name="config_udfpsFrameworkDimmingBrightnessPath" translatable="false"></string>
++
++    <!-- Array of brightness-alpha lut for framework dimming -->
++    <string-array name="config_udfpsDimmingBrightnessAlphaArray" translatable="false">
++          <!-- Example:
++          <item>0,255</item>
++          <item>1,234</item>
++          <item>3,227</item>
++          <item>8,208</item>
++          <item>16,192</item>
++          <item>27,176</item>
++          <item>41,160</item>
++          <item>61,144</item>
++          <item>80,128</item>
++          <item>104,112</item>
++          <item>130,96</item>
++          <item>158,80</item>
++          <item>188,64</item>
++          <item>221,48</item>
++          <item>250,36</item>
++          <item>255,33</item>
++          -->
++    </string-array>
++
++    <!-- Brightness range min for udfps dimming -->
++    <integer name="config_udfpsDimmingBrightnessMin">0</integer>
++
++    <!-- Brightness range max for udfps dimming -->
++    <integer name="config_udfpsDimmingBrightnessMax">0</integer>
++
++    <!-- The amount of delay to add when disabling the dimming.
++         This is used to prevent flickers due to the dimming being disabled
++         before the screen has had chance to switch out of HBM mode -->
++     <integer name="config_udfpsDimmingDisableDelay">0</integer>
++
++     <bool name="config_statusBarBurnInProtection">false</bool>
+ </resources>
+diff --git a/packages/SystemUI/res/values/custom_dimens.xml b/packages/SystemUI/res/values/custom_dimens.xml
+index 58f27e306657..66d6f2c795e0 100644
+--- a/packages/SystemUI/res/values/custom_dimens.xml
++++ b/packages/SystemUI/res/values/custom_dimens.xml
+@@ -5,4 +5,6 @@
+ 
+     <!-- Width of the battery icon in the status bar when set to circle style. -->
+     <dimen name="status_bar_battery_icon_circle_width">14.5dp</dimen>
++    <!-- Maximum vertical offset of statusbar for burn-in protection -->
++    <dimen name="status_bar_offset_max_y">4dp</dimen>
+ </resources>
+diff --git a/packages/SystemUI/src/com/android/systemui/SwipeHelper.java b/packages/SystemUI/src/com/android/systemui/SwipeHelper.java
+index 873a695ecd93..98a35e8281c0 100644
+--- a/packages/SystemUI/src/com/android/systemui/SwipeHelper.java
++++ b/packages/SystemUI/src/com/android/systemui/SwipeHelper.java
+@@ -432,7 +432,7 @@ public class SwipeHelper implements Gefingerpoken {
+             duration = MAX_ESCAPE_ANIMATION_DURATION;
+             if (velocity != 0) {
+                 duration = Math.min(duration,
+-                        (int) (Math.abs(newPos - getTranslation(animView)) * 1000f / Math
++                        (int) (Math.abs(newPos - getTranslation(animView)) * 500f / Math
+                                 .abs(velocity))
+                 );
+             } else {
+diff --git a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
+index 030ea3f1ef2b..920f31129cfa 100644
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
++++ b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
+@@ -98,6 +98,9 @@ import com.android.systemui.util.concurrency.Execution;
+ import com.android.systemui.util.settings.SecureSettings;
+ import com.android.systemui.util.time.SystemClock;
+ 
++import java.io.BufferedReader;
++import java.io.FileReader;
++import java.io.IOException;
+ import java.io.PrintWriter;
+ import java.util.ArrayList;
+ import java.util.HashSet;
+@@ -198,6 +201,9 @@ public class UdfpsController implements DozeReceiver, Dumpable {
+     private final Set<Callback> mCallbacks = new HashSet<>();
+     private final int mUdfpsVendorCode;
+ 
++    private boolean mFrameworkDimming;
++    private int[][] mBrightnessAlphaArray;
++
+     private final AmbientDisplayConfiguration mAmbientDisplayConfiguration;
+     private boolean mScreenOffFod;
+ 
+@@ -878,6 +884,8 @@ public class UdfpsController implements DozeReceiver, Dumpable {
+ 
+     private void showUdfpsOverlay(@NonNull UdfpsControllerOverlay overlay) {
+         mExecution.assertIsMainThread();
++        mFrameworkDimming = mContext.getResources().getBoolean(R.bool.config_udfpsFrameworkDimming);
++        parseBrightnessAlphaArray();
+ 
+         mOverlay = overlay;
+         final int requestReason = overlay.getRequestReason();
+@@ -1022,6 +1030,85 @@ public class UdfpsController implements DozeReceiver, Dumpable {
+         return mSensorProps.sensorType == FingerprintSensorProperties.TYPE_UDFPS_OPTICAL;
+     }
+ 
++    private static int interpolate(int x, int xa, int xb, int ya, int yb) {
++        return ya - (ya - yb) * (x - xa) / (xb - xa);
++    }
++
++    private int getBrightnessFromFramework() {
++        int brightness = Settings.System.getInt(mContext.getContentResolver(),
++                    Settings.System.SCREEN_BRIGHTNESS, 100);
++
++        return brightness;
++    }
++
++    private int getBrightnessFromFile(String brightnessPath) {
++        int brightness = 0;
++
++        try {
++            BufferedReader reader = new BufferedReader(new FileReader(brightnessPath));
++            String line = reader.readLine();
++            brightness = Integer.parseInt(line);
++            reader.close();
++        } catch (IOException e) {
++            Log.e(TAG, "getBrightnessFromFile | IOException: " + e);
++        } catch (NumberFormatException e) {
++            Log.e(TAG, "getBrightnessFromFile | NumberFormatException: " + e);
++        }
++
++        return brightness;
++    }
++
++    private int getBrightness() {
++        // Read config_udfpsFrameworkDimmingBrightnessPath to get the brightness
++        String brightnessPath = mContext.getResources().getString(R.string.config_udfpsFrameworkDimmingBrightnessPath);
++
++        if (brightnessPath != null && !brightnessPath.isEmpty()) {
++            return getBrightnessFromFile(brightnessPath);
++        } else {
++            return getBrightnessFromFramework();
++        }
++    }
++
++    private void updateViewDimAmount(boolean pressed) {
++        if (mFrameworkDimming) {
++            if (pressed) {
++                int curBrightness = getBrightness();
++                int i, dimAmount;
++                for (i = 0; i < mBrightnessAlphaArray.length; i++) {
++                    if (mBrightnessAlphaArray[i][0] >= curBrightness) break;
++                }
++                if (i == 0) {
++                    dimAmount = mBrightnessAlphaArray[i][1];
++                } else if (i == mBrightnessAlphaArray.length) {
++                    dimAmount = mBrightnessAlphaArray[i-1][1];
++                } else {
++                    dimAmount = interpolate(curBrightness,
++                            mBrightnessAlphaArray[i][0], mBrightnessAlphaArray[i-1][0],
++                            mBrightnessAlphaArray[i][1], mBrightnessAlphaArray[i-1][1]);
++                }
++                // Call the function in UdfpsOverlayController with dimAmount
++                mOverlay.updateDimAmount(dimAmount / 255.0f);
++            } else {
++                // Call the function in UdfpsOverlayController with dimAmount
++                mOverlay.updateDimAmount(0.0f);
++            }
++        }
++    }
++
++    private void parseBrightnessAlphaArray() {
++        mFrameworkDimming = mContext.getResources().getBoolean(R.bool.config_udfpsFrameworkDimming);
++        if (mFrameworkDimming) {
++            String[] array = mContext.getResources().getStringArray(
++                    R.array.config_udfpsDimmingBrightnessAlphaArray);
++            mBrightnessAlphaArray = new int[array.length][2];
++            for (int i = 0; i < array.length; i++) {
++                String[] s = array[i].split(",");
++                mBrightnessAlphaArray[i][0] = Integer.parseInt(s[0]);
++                mBrightnessAlphaArray[i][1] = Integer.parseInt(s[1]);
++            }
++        }
++    }
++
+     public boolean isFingerDown() {
+         return mOnFingerDown;
+     }
+@@ -1062,6 +1149,9 @@ public class UdfpsController implements DozeReceiver, Dumpable {
+             Log.w(TAG, "Null request in onFingerDown");
+             return;
+         }
++
++        updateViewDimAmount(true);
++
+         if (!mOverlay.matchesRequestId(requestId)) {
+             Log.w(TAG, "Mismatched fingerDown: " + requestId
+                     + " current: " + mOverlay.getRequestId());
+@@ -1178,6 +1268,24 @@ public class UdfpsController implements DozeReceiver, Dumpable {
+             unconfigureDisplay(view);
+         }
+         cancelAodSendFingerUpAction();
++
++        // Add a delay to ensure that the dim amount is updated after the display
++        // has had chance to switch out of HBM mode.
++        // The delay, in ms is stored in config_udfpsDimmingDisableDelay.
++        // If the delay is 0, the dim amount will be updated immediately.
++        final int delay = mContext.getResources().getInteger(
++                R.integer.config_udfpsDimmingDisableDelay);
++        if (delay > 0) {
++            mFgExecutor.executeDelayed(() -> {
++                // A race condition exists where the overlay is destroyed before the the dim amount is updated.
++                // This check ensures that the overlay is still valid.
++                if (mOverlay != null && mOverlay.matchesRequestId(requestId)) {
++                    updateViewDimAmount(false);
++                }
++            }, delay);
++        } else {
++            updateViewDimAmount(false);
++        }
+     }
+ 
+     /**
+diff --git a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt
+index b6b5d26b398c..8a6f70814439 100644
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt
++++ b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt
+@@ -111,7 +111,7 @@ class UdfpsControllerOverlay @JvmOverloads constructor(
+     private var overlayTouchListener: TouchExplorationStateChangeListener? = null
+ 
+     private val coreLayoutParams = WindowManager.LayoutParams(
+-        WindowManager.LayoutParams.TYPE_KEYGUARD_DIALOG,
++        WindowManager.LayoutParams.TYPE_DISPLAY_OVERLAY,
+         0 /* flags set in computeLayoutParams() */,
+         PixelFormat.TRANSLUCENT
+     ).apply {
+@@ -120,9 +120,11 @@ class UdfpsControllerOverlay @JvmOverloads constructor(
+         gravity = android.view.Gravity.TOP or android.view.Gravity.LEFT
+         layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+         flags = (Utils.FINGERPRINT_OVERLAY_LAYOUT_PARAM_FLAGS or
++                WindowManager.LayoutParams.FLAG_DIM_BEHIND or
+                 WindowManager.LayoutParams.FLAG_SPLIT_TOUCH)
+         privateFlags = WindowManager.LayoutParams.PRIVATE_FLAG_TRUSTED_OVERLAY
+         // Avoid announcing window title.
++        dimAmount = 0.0f
+         accessibilityTitle = " "
+ 
+         if (featureFlags.isEnabled(Flags.UDFPS_NEW_TOUCH_DETECTION)) {
+@@ -130,6 +132,12 @@ class UdfpsControllerOverlay @JvmOverloads constructor(
+         }
+     }
+ 
++    fun updateDimAmount(newDimAmount: Float): Float {
++        coreLayoutParams.dimAmount = newDimAmount
++        windowManager.updateViewLayout(overlayView, coreLayoutParams)
++        return newDimAmount
++    }
++
+     /** A helper if the [requestReason] was due to enrollment. */
+     val enrollHelper: UdfpsEnrollHelper? =
+         if (requestReason.isEnrollmentReason() && !shouldRemoveEnrollmentUi()) {
+diff --git a/packages/SystemUI/src/com/android/systemui/doze/util/BurnInHelper.kt b/packages/SystemUI/src/com/android/systemui/doze/util/BurnInHelper.kt
+index 5c6478ed0895..931d0beea984 100644
+--- a/packages/SystemUI/src/com/android/systemui/doze/util/BurnInHelper.kt
++++ b/packages/SystemUI/src/com/android/systemui/doze/util/BurnInHelper.kt
+@@ -31,10 +31,18 @@ private const val BURN_IN_PREVENTION_PERIOD_PROGRESS = 89f
+  * @param amplitude Maximum translation that will be interpolated.
+  * @param xAxis If we're moving on X or Y.
+  */
+-fun getBurnInOffset(amplitude: Int, xAxis: Boolean): Int {
+-    return zigzag(System.currentTimeMillis() / MILLIS_PER_MINUTES,
+-            amplitude.toFloat(),
+-            if (xAxis) BURN_IN_PREVENTION_PERIOD_X else BURN_IN_PREVENTION_PERIOD_Y).toInt()
++@JvmOverloads
++fun getBurnInOffset(
++    amplitude: Int,
++    xAxis: Boolean,
++    periodX: Float = BURN_IN_PREVENTION_PERIOD_X,
++    periodY: Float = BURN_IN_PREVENTION_PERIOD_Y
++): Int {
++    return zigzag(
++        System.currentTimeMillis() / MILLIS_PER_MINUTES,
++        amplitude.toFloat(),
++        if (xAxis) periodX else periodY
++    ).toInt()
+ }
+ 
+ /**
+@@ -67,4 +75,4 @@ private fun zigzag(x: Float, amplitude: Float, period: Float): Float {
+     val xprime = x % period / (period / 2)
+     val interpolationAmount = if (xprime <= 1) xprime else 2 - xprime
+     return MathUtils.lerp(0f, amplitude, interpolationAmount)
+-}
+\ No newline at end of file
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/navigationbar/NavigationBarView.java b/packages/SystemUI/src/com/android/systemui/navigationbar/NavigationBarView.java
+index 9ac8bb192645..ea57f5bf305b 100644
+--- a/packages/SystemUI/src/com/android/systemui/navigationbar/NavigationBarView.java
++++ b/packages/SystemUI/src/com/android/systemui/navigationbar/NavigationBarView.java
+@@ -74,6 +74,7 @@ import com.android.systemui.navigationbar.buttons.KeyButtonDrawable;
+ import com.android.systemui.navigationbar.buttons.NearestTouchFrame;
+ import com.android.systemui.navigationbar.buttons.RotationContextButton;
+ import com.android.systemui.navigationbar.gestural.EdgeBackGestureHandler;
++import com.android.systemui.navigationbar.gestural.NavigationHandle;
+ import com.android.systemui.recents.Recents;
+ import com.android.systemui.settings.DisplayTracker;
+ import com.android.systemui.shade.NotificationPanelViewController;
+@@ -84,6 +85,7 @@ import com.android.systemui.shared.system.QuickStepContract;
+ import com.android.systemui.statusbar.phone.AutoHideController;
+ import com.android.systemui.statusbar.phone.CentralSurfaces;
+ import com.android.systemui.statusbar.phone.LightBarTransitionsController;
++import com.android.systemui.statusbar.policy.Offset;
+ import com.android.systemui.tuner.TunerService;
+ import com.android.wm.shell.back.BackAnimation;
+ import com.android.wm.shell.pip.Pip;
+@@ -185,6 +187,9 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
+     private boolean mShowSwipeUpUi;
+     private UpdateActiveTouchRegionsCallback mUpdateActiveTouchRegionsCallback;
+ 
++    @Nullable
++    private ViewGroup mNavigationBarContents = null;
++
+     private boolean mShowCursorKeys;
+     private boolean mImeVisible;
+ 
+@@ -886,6 +891,22 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
+         getAccessibilityButton().setLongClickable(longClickable);
+         mContextualButtonGroup.setButtonVisibility(R.id.accessibility_button, visible);
+     }
++    public void offsetNavBar(Offset offset) {
++        if (isGesturalMode(mNavBarMode)) {
++            final NavigationHandle handle = (NavigationHandle) getHomeHandle().getCurrentView();
++            if (handle != null) {
++                handle.setTranslationY(offset.getY());
++                handle.invalidate();
++            }
++            return;
++        }
++        if (mNavigationBarContents == null) {
++            return;
++        }
++        mNavigationBarContents.setTranslationX(offset.getX());
++        mNavigationBarContents.setTranslationY(offset.getY());
++        invalidate();
++    }
+ 
+     @Override
+     public void onFinishInflate() {
+@@ -893,6 +914,8 @@ public class NavigationBarView extends FrameLayout implements TunerService.Tunab
+         mNavigationInflaterView = findViewById(R.id.navigation_inflater);
+         mNavigationInflaterView.setButtonDispatchers(mButtonDispatchers);
+ 
++        mNavigationBarContents = (ViewGroup) findViewById(R.id.nav_buttons);
++
+         updateOrientationViews();
+         reloadNavIcons();
+     }
+diff --git a/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotController.java b/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotController.java
+index 3b12b3270ff7..797c422e561f 100644
+--- a/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotController.java
++++ b/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotController.java
+@@ -261,7 +261,7 @@ public class ScreenshotController {
+     // From WizardManagerHelper.java
+     private static final String SETTINGS_SECURE_USER_SETUP_COMPLETE = "user_setup_complete";
+ 
+-    private static final int SCREENSHOT_CORNER_DEFAULT_TIMEOUT_MILLIS = 6000;
++    private static final int SCREENSHOT_CORNER_DEFAULT_TIMEOUT_MILLIS = 3000;
+ 
+     private final WindowContext mContext;
+     private final FeatureFlags mFlags;
+diff --git a/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotView.java b/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotView.java
+index eb9d75681a86..b1ced8db87f9 100644
+--- a/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotView.java
++++ b/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotView.java
+@@ -120,8 +120,8 @@ public class ScreenshotView extends FrameLayout implements
+     private static final long SCREENSHOT_TO_CORNER_X_DURATION_MS = 234;
+     private static final long SCREENSHOT_TO_CORNER_Y_DURATION_MS = 500;
+     private static final long SCREENSHOT_TO_CORNER_SCALE_DURATION_MS = 234;
+-    public static final long SCREENSHOT_ACTIONS_EXPANSION_DURATION_MS = 400;
+-    private static final long SCREENSHOT_ACTIONS_ALPHA_DURATION_MS = 100;
++    public static final long SCREENSHOT_ACTIONS_EXPANSION_DURATION_MS = 300;
++    private static final long SCREENSHOT_ACTIONS_ALPHA_DURATION_MS = 75;
+     private static final float SCREENSHOT_ACTIONS_START_SCALE_X = .7f;
+     private static final int SWIPE_PADDING_DP = 12; // extra padding around views to allow swipe
+ 
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/phone/CentralSurfacesImpl.java b/packages/SystemUI/src/com/android/systemui/statusbar/phone/CentralSurfacesImpl.java
+index 0ef7368e07c1..9a600137b690 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/phone/CentralSurfacesImpl.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/phone/CentralSurfacesImpl.java
+@@ -240,6 +240,7 @@ import com.android.systemui.statusbar.policy.ExtensionController;
+ import com.android.systemui.statusbar.policy.KeyguardStateController;
+ import com.android.systemui.statusbar.policy.UserInfoControllerImpl;
+ import com.android.systemui.statusbar.policy.UserSwitcherController;
++import com.android.systemui.statusbar.policy.BurnInProtectionController;
+ import com.android.systemui.statusbar.window.StatusBarWindowController;
+ import com.android.systemui.statusbar.window.StatusBarWindowStateController;
+ import com.android.systemui.surfaceeffects.ripple.RippleShader.RippleShape;
+@@ -683,6 +684,8 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces, Tune
+         onBackPressed();
+     };
+ 
++    private final BurnInProtectionController mBurnInProtectionController;
++
+     private boolean mDisplayCutoutHidden;
+     private Handler mRefreshNavbarHandler;
+ 
+@@ -787,6 +790,7 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces, Tune
+             UserTracker userTracker,
+             Provider<FingerprintManager> fingerprintManager,
+             TunerService tunerService,
++            BurnInProtectionController burnInProtectionController,
+             @Main Handler refreshNavbarHandler
+     ) {
+         mContext = context;
+@@ -879,6 +883,7 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces, Tune
+         statusBarWindowStateController.addListener(this::onStatusBarWindowStateChanged);
+ 
+         mScreenOffAnimationController = screenOffAnimationController;
++        mBurnInProtectionController = burnInProtectionController;
+ 
+         mShadeExpansionStateManager.addExpansionListener(this::onPanelExpansionChanged);
+         mShadeExpansionStateManager.addFullExpansionListener(this::onShadeExpansionFullyChanged);
+@@ -1263,6 +1268,7 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces, Tune
+                     mNotificationPanelViewController.updatePanelExpansionAndVisibility();
+                     setBouncerShowingForStatusBarComponents(mBouncerShowing);
+                     checkBarModes();
++                    mBurnInProtectionController.setPhoneStatusBarView(mStatusBarView);
+                 });
+         initializer.initializeStatusBar(mCentralSurfacesComponent);
+ 
+@@ -1595,6 +1601,7 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces, Tune
+     // Try to remove this.
+     protected void createNavigationBar(@Nullable RegisterStatusBarResult result) {
+         mNavigationBarController.createNavigationBars(true /* includeDefaultDisplay */, result);
++        mBurnInProtectionController.setNavigationBarView(getNavigationBarView());
+     }
+ 
+     /**
+@@ -3537,6 +3544,7 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces, Tune
+     public void collapseShade() {
+         if (mNotificationPanelViewController.isTracking()) {
+             mNotificationShadeWindowViewController.cancelCurrentTouch();
++            mBurnInProtectionController.stopShiftTimer();
+         }
+         if (mPanelExpanded && mState == StatusBarState.SHADE) {
+             mShadeController.animateCollapseShade();
+@@ -3707,6 +3715,7 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces, Tune
+                 }
+             }
+             updateScrimController();
++            mBurnInProtectionController.startShiftTimer();
+         }
+     };
+ 
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java b/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java
+index 94d7ced26f04..c1749c92d21f 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java
+@@ -20,6 +20,7 @@ package com.android.systemui.statusbar.phone;
+ import android.annotation.Nullable;
+ import android.content.Context;
+ import android.content.res.Configuration;
++import android.content.res.Resources;
+ import android.graphics.Rect;
+ import android.inputmethodservice.InputMethodService;
+ import android.os.IBinder;
+@@ -55,6 +56,7 @@ import com.android.systemui.shared.rotation.FloatingRotationButton;
+ import com.android.systemui.shared.rotation.RotationButtonController;
+ import com.android.systemui.statusbar.CommandQueue;
+ import com.android.systemui.statusbar.CommandQueue.Callbacks;
++import com.android.systemui.statusbar.policy.Offset;
+ import com.android.systemui.util.leak.RotationUtils;
+ 
+ import java.util.Objects;
+@@ -77,6 +79,8 @@ public class PhoneStatusBarView extends FrameLayout implements Callbacks {
+     private int mStatusBarHeight;
+     @Nullable
+     private Gefingerpoken mTouchEventHandler;
++    @Nullable
++    private ViewGroup mStatusBarContents = null;
+ 
+     /**
+      * Draw this many pixels into the left/right side of the cutout to optimally use the space
+@@ -138,6 +142,15 @@ public class PhoneStatusBarView extends FrameLayout implements Callbacks {
+         mTouchEventHandler = handler;
+     }
+ 
++    public void offsetStatusBar(Offset offset) {
++        if (mStatusBarContents == null) {
++            return;
++        }
++        mStatusBarContents.setTranslationX(offset.getX());
++        mStatusBarContents.setTranslationY(offset.getY());
++        invalidate();
++    }
++
+     void init(StatusBarUserChipViewModel viewModel) {
+         StatusBarUserSwitcherContainer container = findViewById(R.id.user_switcher_container);
+         StatusBarUserChipViewBinder.bind(container, viewModel);
+@@ -150,6 +163,8 @@ public class PhoneStatusBarView extends FrameLayout implements Callbacks {
+         mClockController = new ClockController(getContext(), this);
+         mCutoutSpace = findViewById(R.id.cutout_space_view);
+ 
++        mStatusBarContents = (ViewGroup) findViewById(R.id.status_bar_contents);
++
+         updateResources();
+     }
+ 
+@@ -294,12 +309,11 @@ public class PhoneStatusBarView extends FrameLayout implements Callbacks {
+         int statusBarPaddingEnd = getResources().getDimensionPixelSize(
+                 R.dimen.status_bar_padding_end);
+ 
+-        View sbContents = findViewById(R.id.status_bar_contents);
+-        sbContents.setPaddingRelative(
+-                statusBarPaddingStart,
+-                statusBarPaddingTop,
+-                statusBarPaddingEnd,
+-                0);
++        mStatusBarContents.setPaddingRelative(
++                    statusBarPaddingStart,
++                    statusBarPaddingTop,
++                    statusBarPaddingEnd,
++                    0);
+ 
+         findViewById(R.id.notification_lights_out)
+                 .setPaddingRelative(0, statusBarPaddingStart, 0, 0);
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/policy/BurnInProtectionController.kt b/packages/SystemUI/src/com/android/systemui/statusbar/policy/BurnInProtectionController.kt
+new file mode 100644
+index 000000000000..47a05fca385e
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/policy/BurnInProtectionController.kt
+@@ -0,0 +1,231 @@
++/*
++ * Copyright (C) 2017-2018 Paranoid Android
++ * Copyright (C) 2022 FlamingoOS Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++ package com.android.systemui.statusbar.policy
++
++ import android.content.Context
++ import android.util.Log
++
++ import com.android.systemui.R
++ import com.android.systemui.dagger.SysUISingleton
++ import com.android.systemui.doze.util.getBurnInOffset
++ import com.android.systemui.navigationbar.NavigationBarView
++ import com.android.systemui.navigationbar.NavigationModeController
++ import com.android.systemui.shared.system.QuickStepContract.isGesturalMode
++ import com.android.systemui.statusbar.phone.PhoneStatusBarView
++ import com.android.systemui.statusbar.policy.ConfigurationController
++ import com.android.systemui.statusbar.policy.ConfigurationController.ConfigurationListener
++
++ import javax.inject.Inject
++
++ import kotlinx.coroutines.CoroutineScope
++ import kotlinx.coroutines.Dispatchers
++ import kotlinx.coroutines.Job
++ import kotlinx.coroutines.cancelAndJoin
++ import kotlinx.coroutines.delay
++ import kotlinx.coroutines.isActive
++ import kotlinx.coroutines.launch
++
++ private const val BURN_IN_PREVENTION_PERIOD = 83f
++ private const val UPDATE_INTERVAL = 1000 * 10L
++
++ private val TAG = BurnInProtectionController::class.simpleName
++
++ @SysUISingleton
++ class BurnInProtectionController @Inject constructor(
++     private val context: Context,
++     configurationController: ConfigurationController,
++     navigationModeController: NavigationModeController,
++ ) : NavigationModeController.ModeChangedListener,
++     ConfigurationListener {
++
++     private val coroutineScope = CoroutineScope(Dispatchers.Main)
++
++     private val shiftEnabled = context.resources.getBoolean(R.bool.config_statusBarBurnInProtection)
++
++     private var navigationMode: Int = navigationModeController.addListener(this)
++
++     private var navigationBarView: NavigationBarView? = null
++     private var phoneStatusBarView: PhoneStatusBarView? = null
++
++     private var shiftJob: Job? = null
++
++     private var maxStatusBarOffsetX = 0
++     private var maxStatusBarOffsetY = 0
++     private var maxNavBarShiftX = 0
++     private var maxNavBarShiftY = 0
++
++     private var statusBarOffset = Offset.Zero
++     private var navBarOffset = Offset.Zero
++
++     init {
++         logD {
++             "shiftEnabled = $shiftEnabled, isGesturalMode = ${isGesturalMode()}"
++         }
++         configurationController.addCallback(this)
++         loadResources()
++     }
++
++     private fun loadResources()  {
++         with(context.resources) {
++             maxStatusBarOffsetX = minOf(
++                 getDimensionPixelSize(R.dimen.status_bar_padding_start),
++                 getDimensionPixelSize(R.dimen.status_bar_padding_end)
++             ) / 2
++             maxStatusBarOffsetY = getDimensionPixelSize(R.dimen.status_bar_offset_max_y) / 2
++         }
++         calculateNavBarMaxOffset()
++         logD {
++             "maxStatusBarOffsetX = $maxStatusBarOffsetX, maxStatusBarOffsetY = $maxStatusBarOffsetY"
++         }
++     }
++
++     private fun calculateNavBarMaxOffset() {
++         with(context.resources) {
++             maxNavBarShiftX = if (isGesturalMode()) {
++                 0
++             } else {
++                 getDimensionPixelSize(R.dimen.floating_rotation_button_min_margin) / 4
++             }
++             maxNavBarShiftY = if (isGesturalMode()) {
++                 getDimensionPixelSize(R.dimen.navigation_handle_bottom) / 3
++             } else {
++                 val frameHeight = getDimensionPixelSize(R.dimen.navigation_bar_height)
++                 val buttonHeight = getDimensionPixelSize(R.dimen.navigation_icon_size)
++                 (frameHeight - buttonHeight) / 3
++             }
++         }
++         logD {
++             "maxNavBarShiftX = $maxNavBarShiftX, maxNavBarShiftY = $maxNavBarShiftY"
++         }
++     }
++
++     fun setNavigationBarView(navigationBarView: NavigationBarView) {
++         this.navigationBarView = navigationBarView
++     }
++
++     fun setPhoneStatusBarView(phoneStatusBarView: PhoneStatusBarView) {
++         this.phoneStatusBarView = phoneStatusBarView
++     }
++
++     fun startShiftTimer() {
++         if (!shiftEnabled || (shiftJob?.isActive == true)) return
++         shiftJob = coroutineScope.launch {
++             while (isActive) {
++                 val sbOffset = Offset(
++                     getBurnInOffsetX(maxStatusBarOffsetX),
++                     getBurnInOffsetY(maxStatusBarOffsetY)
++                 )
++                 val nbOffset = if (isGesturalMode()) {
++                     Offset(0, getBurnInOffsetY(maxNavBarShiftY))
++                 } else {
++                     Offset(getBurnInOffsetX(maxNavBarShiftX), getBurnInOffsetY(maxNavBarShiftY))
++                 }
++                 logD {
++                     "new offsets: sbOffset = $sbOffset, nbOffset = $nbOffset"
++                 }
++                 updateViews(sbOffset, nbOffset)
++                 delay(UPDATE_INTERVAL)
++             }
++         }
++         logD {
++             "Started shift job"
++         }
++     }
++
++     private fun updateViews(sbOffset: Offset, nbOffset: Offset) {
++         if (sbOffset != statusBarOffset) {
++             logD {
++                 "Translating statusbar"
++             }
++             phoneStatusBarView?.offsetStatusBar(sbOffset)
++             statusBarOffset = sbOffset
++         }
++         if (nbOffset != navBarOffset) {
++             logD {
++                 "Translating navbar"
++             }
++             navigationBarView?.offsetNavBar(nbOffset)
++             navBarOffset = nbOffset
++         }
++     }
++
++     fun stopShiftTimer() {
++         if (!shiftEnabled || (shiftJob?.isActive != true)) return
++         logD {
++             "Cancelling shift job"
++         }
++         coroutineScope.launch {
++             shiftJob?.cancelAndJoin()
++             updateViews(Offset.Zero, Offset.Zero)
++             logD {
++                 "Cancelled shift job"
++             }
++         }
++     }
++
++     override fun onNavigationModeChanged(mode: Int) {
++         if (navigationMode == mode) return
++         navigationMode = mode
++         logD {
++             "onNavigationModeChanged: isGesturalMode = ${isGesturalMode()}"
++         }
++         calculateNavBarMaxOffset()
++     }
++
++     override fun onDensityOrFontScaleChanged() {
++         logD {
++             "onDensityOrFontScaleChanged"
++         }
++         loadResources()
++     }
++
++     private fun isGesturalMode() = isGesturalMode(navigationMode)
++ }
++
++ private fun getBurnInOffsetX(maxOffset: Int): Int {
++     return maxOffset - getBurnInOffset(
++         amplitude = maxOffset * 2,
++         xAxis = true,
++         periodX = BURN_IN_PREVENTION_PERIOD,
++         periodY = BURN_IN_PREVENTION_PERIOD
++     )
++ }
++
++ private fun getBurnInOffsetY(maxOffset: Int): Int {
++     return maxOffset - getBurnInOffset(
++         amplitude = maxOffset * 2,
++         xAxis = false,
++         periodX = BURN_IN_PREVENTION_PERIOD,
++         periodY = BURN_IN_PREVENTION_PERIOD
++     )
++ }
++
++ private inline fun logD(crossinline msg: () -> String) {
++     if (Log.isLoggable(TAG, Log.DEBUG)) {
++         Log.d(TAG, msg())
++     }
++ }
++
++ data class Offset(
++     val x: Int,
++     val y: Int
++ ) {
++     companion object {
++         val Zero = Offset(0, 0)
++     }
++ }
+diff --git a/packages/SystemUI/src/com/android/systemui/tuner/TunerFragment.java b/packages/SystemUI/src/com/android/systemui/tuner/TunerFragment.java
+index 29d6d00b6eb4..a14b3c8a5793 100644
+--- a/packages/SystemUI/src/com/android/systemui/tuner/TunerFragment.java
++++ b/packages/SystemUI/src/com/android/systemui/tuner/TunerFragment.java
+@@ -51,6 +51,9 @@ public class TunerFragment extends PreferenceFragment {
+             "nav_bar",
+             "lockscreen",
+             "picture_in_picture",
++            "volume_and_do_not_disturb",
++            "doze",
++            KEY_PLUGINS,
+     };
+ 
+     private static final int MENU_REMOVE = Menu.FIRST + 1;
+diff --git a/services/core/java/com/android/server/StorageManagerService.java b/services/core/java/com/android/server/StorageManagerService.java
+index 450a55f9d2db..58143edc6f3d 100644
+--- a/services/core/java/com/android/server/StorageManagerService.java
++++ b/services/core/java/com/android/server/StorageManagerService.java
+@@ -2843,6 +2843,8 @@ class StorageManagerService extends IStorageManager.Stub
+         enforcePermission(android.Manifest.permission.MOUNT_FORMAT_FILESYSTEMS);
+ 
+         try {
++            int avgWriteAmount = 0;
++            int targetDirtyRatio = mTargetDirtyRatio;
+             int latestWrite = mVold.getWriteAmount();
+             if (latestWrite == -1) {
+                 Slog.w(TAG, "Failed to get storage write record");
+@@ -2855,11 +2857,12 @@ class StorageManagerService extends IStorageManager.Stub
+             // (first boot after OTA), We skip the smart idle maintenance
+             if (!needsCheckpoint() || !supportsBlockCheckpoint()) {
+                 if (!refreshLifetimeConstraint() || !checkChargeStatus()) {
+-                    return;
++                    Slog.i(TAG, "Turn off gc_urgent based on checking lifetime and charge status");
++                    targetDirtyRatio = 100;
++                } else {
++                    avgWriteAmount = getAverageWriteAmount();
+                 }
+ 
+-                int avgWriteAmount = getAverageWriteAmount();
+-
+                 Slog.i(TAG, "Set smart idle maintenance: " + "latest write amount: " +
+                             latestWrite + ", average write amount: " + avgWriteAmount +
+                             ", min segment threshold: " + mMinSegmentsThreshold +
+@@ -2867,10 +2870,10 @@ class StorageManagerService extends IStorageManager.Stub
+                             ", segment reclaim weight: " + mSegmentReclaimWeight +
+                             ", period(min): " + sSmartIdleMaintPeriod +
+                             ", min gc sleep time(ms): " + mMinGCSleepTime +
+-                            ", target dirty ratio: " + mTargetDirtyRatio);
++                            ", target dirty ratio: " + targetDirtyRatio);
+                 mVold.setGCUrgentPace(avgWriteAmount, mMinSegmentsThreshold, mDirtyReclaimRate,
+                                       mSegmentReclaimWeight, sSmartIdleMaintPeriod,
+-                                      mMinGCSleepTime, mTargetDirtyRatio);
++                                      mMinGCSleepTime, targetDirtyRatio);
+             } else {
+                 Slog.i(TAG, "Skipping smart idle maintenance - block based checkpoint in progress");
+             }
+diff --git a/services/core/java/com/android/server/Watchdog.java b/services/core/java/com/android/server/Watchdog.java
+index 1fab28efb1ac..626751178b4d 100644
+--- a/services/core/java/com/android/server/Watchdog.java
++++ b/services/core/java/com/android/server/Watchdog.java
+@@ -840,6 +840,8 @@ public class Watchdog implements Dumpable {
+                 Slog.w(TAG, "Restart not allowed: Watchdog is *not* killing the system process");
+             } else {
+                 Slog.w(TAG, "*** WATCHDOG KILLING SYSTEM PROCESS: " + subject);
++                // Emergency sync
++                doSysRq('s');
+                 WatchdogDiagnostics.diagnoseCheckers(blockedCheckers);
+                 Slog.w(TAG, "*** GOODBYE!");
+                 if (!Build.IS_USER && isCrashLoopFound()
+diff --git a/services/core/java/com/android/server/am/ProcessList.java b/services/core/java/com/android/server/am/ProcessList.java
+index f7dfef9ed209..912e0f6bd66d 100644
+--- a/services/core/java/com/android/server/am/ProcessList.java
++++ b/services/core/java/com/android/server/am/ProcessList.java
+@@ -104,6 +104,7 @@ import android.os.Trace;
+ import android.os.UserHandle;
+ import android.os.storage.StorageManagerInternal;
+ import android.system.Os;
++import android.system.OsConstants;
+ import android.text.TextUtils;
+ import android.util.ArrayMap;
+ import android.util.ArraySet;
+@@ -2332,9 +2333,15 @@ public final class ProcessList {
+ 
+             if (!regularZygote) {
+                 // webview and app zygote don't have the permission to create the nodes
+-                if (Process.createProcessGroup(uid, startResult.pid) < 0) {
+-                    Slog.e(ActivityManagerService.TAG, "Unable to create process group for "
++                final int res = Process.createProcessGroup(uid, startResult.pid);
++                if (res < 0) {
++                    if (res == -OsConstants.ESRCH) {
++                        Slog.e(ActivityManagerService.TAG, "Unable to create process group for "
+                             + app.processName + " (" + startResult.pid + ")");
++                    } else {
++                        throw new AssertionError("Unable to create process group for "
++                            + app.processName + " (" + startResult.pid + ")");
++                    }
+                 }
+             }
+ 
+diff --git a/services/core/java/com/android/server/power/ShutdownThread.java b/services/core/java/com/android/server/power/ShutdownThread.java
+index c6aa0dfa645f..4703c28dba3a 100644
+--- a/services/core/java/com/android/server/power/ShutdownThread.java
++++ b/services/core/java/com/android/server/power/ShutdownThread.java
+@@ -78,7 +78,7 @@ public final class ShutdownThread extends Thread {
+     private static final int MOUNT_SERVICE_STOP_PERCENT = 20;
+ 
+     // length of vibration before shutting down
+-    private static final int SHUTDOWN_VIBRATE_MS = 500;
++    private static final int SHUTDOWN_VIBRATE_MS = 250;
+ 
+     // state tracking
+     private static final Object sIsStartedGuard = new Object();
+diff --git a/services/core/java/com/android/server/wm/InsetsPolicy.java b/services/core/java/com/android/server/wm/InsetsPolicy.java
+index f578fe0c111e..f141cea32362 100644
+--- a/services/core/java/com/android/server/wm/InsetsPolicy.java
++++ b/services/core/java/com/android/server/wm/InsetsPolicy.java
+@@ -49,7 +49,6 @@ import android.app.WindowConfiguration;
+ import android.content.ComponentName;
+ import android.content.res.Resources;
+ import android.graphics.Rect;
+-import android.util.ArrayMap;
+ import android.util.IntArray;
+ import android.util.SparseArray;
+ import android.view.InsetsAnimationControlCallbacks;
+@@ -75,6 +74,8 @@ import com.android.internal.annotations.VisibleForTesting;
+ import com.android.server.DisplayThread;
+ import com.android.server.statusbar.StatusBarManagerInternal;
+ 
++import java.util.HashMap;
++
+ /**
+  * Policy that implements who gets control over the windows generating insets.
+  */
+@@ -380,10 +381,9 @@ class InsetsPolicy {
+                 state.removeSource(ITYPE_CAPTION_BAR);
+             }
+         }
+-        ArrayMap<Integer, WindowContainerInsetsSourceProvider> providers = mStateController
++        HashMap<Integer, WindowContainerInsetsSourceProvider> providers = mStateController
+                 .getSourceProviders();
+-        for (int i = providers.size() - 1; i >= 0; i--) {
+-            WindowContainerInsetsSourceProvider otherProvider = providers.valueAt(i);
++        for (WindowContainerInsetsSourceProvider otherProvider : providers.values()) {
+             if (otherProvider.overridesFrame(windowType)) {
+                 if (!stateCopied) {
+                     state = new InsetsState(state);
+diff --git a/services/core/java/com/android/server/wm/InsetsStateController.java b/services/core/java/com/android/server/wm/InsetsStateController.java
+index ac1fbc35325a..189dd8a71d43 100644
+--- a/services/core/java/com/android/server/wm/InsetsStateController.java
++++ b/services/core/java/com/android/server/wm/InsetsStateController.java
+@@ -46,6 +46,8 @@ import java.io.PrintWriter;
+ import java.util.ArrayList;
+ import java.util.function.Consumer;
+ import java.util.function.Function;
++import java.util.HashMap;
++import java.util.Map;
+ 
+ /**
+  * Manages global window inset state in the system represented by {@link InsetsState}.
+@@ -56,8 +58,8 @@ class InsetsStateController {
+     private final InsetsState mState = new InsetsState();
+     private final DisplayContent mDisplayContent;
+ 
+-    private final ArrayMap<Integer, WindowContainerInsetsSourceProvider> mProviders =
+-            new ArrayMap<>();
++    private final HashMap<Integer, WindowContainerInsetsSourceProvider> mProviders =
++            new HashMap<>();
+     private final ArrayMap<InsetsControlTarget, ArrayList<Integer>> mControlTargetTypeMap =
+             new ArrayMap<>();
+     private final SparseArray<InsetsControlTarget> mTypeControlTargetMap = new SparseArray<>();
+@@ -118,7 +120,7 @@ class InsetsStateController {
+         return result;
+     }
+ 
+-    ArrayMap<Integer, WindowContainerInsetsSourceProvider> getSourceProviders() {
++    HashMap<Integer, WindowContainerInsetsSourceProvider> getSourceProviders() {
+         return mProviders;
+     }
+ 
+@@ -146,8 +148,8 @@ class InsetsStateController {
+      */
+     void onPostLayout() {
+         Trace.traceBegin(TRACE_TAG_WINDOW_MANAGER, "ISC.onPostLayout");
+-        for (int i = mProviders.size() - 1; i >= 0; i--) {
+-            mProviders.valueAt(i).onPostLayout();
++        for (InsetsSourceProvider provider : mProviders.values()) {
++            provider.onPostLayout();
+         }
+         if (!mLastState.equals(mState)) {
+             mLastState.set(mState, true /* copySources */);
+@@ -195,8 +197,8 @@ class InsetsStateController {
+ 
+     void onInsetsModified(InsetsControlTarget caller) {
+         boolean changed = false;
+-        for (int i = mProviders.size() - 1; i >= 0; i--) {
+-            changed |= mProviders.valueAt(i).updateClientVisibility(caller);
++        for (InsetsSourceProvider provider : mProviders.values()) {
++            changed |= provider.updateClientVisibility(caller);
+         }
+         if (changed) {
+             notifyInsetsChanged();
+@@ -341,8 +343,7 @@ class InsetsStateController {
+             return;
+         }
+         mDisplayContent.mWmService.mAnimator.addAfterPrepareSurfacesRunnable(() -> {
+-            for (int i = mProviders.size() - 1; i >= 0; i--) {
+-                final WindowContainerInsetsSourceProvider provider = mProviders.valueAt(i);
++            for (final WindowContainerInsetsSourceProvider provider : mProviders.values()) {
+                 provider.onSurfaceTransactionApplied();
+             }
+             final ArraySet<InsetsControlTarget> newControlTargets = new ArraySet<>();
+@@ -381,8 +382,8 @@ class InsetsStateController {
+                     + mTypeControlTargetMap.valueAt(i));
+         }
+         pw.println(prefix + "InsetsSourceProviders:");
+-        for (int i = mProviders.size() - 1; i >= 0; i--) {
+-            mProviders.valueAt(i).dump(pw, prefix + "  ");
++        for (InsetsSourceProvider provider : mProviders.values()) {
++            provider.dump(pw, prefix + "  ");
+         }
+     }
+ }
+diff --git a/services/core/java/com/android/server/wm/Task.java b/services/core/java/com/android/server/wm/Task.java
+index 6fcfc005adaf..9a752ef3e7d0 100644
+--- a/services/core/java/com/android/server/wm/Task.java
++++ b/services/core/java/com/android/server/wm/Task.java
+@@ -4675,8 +4675,15 @@ class Task extends TaskFragment {
+             if (topActivity != null && currentMode == WINDOWING_MODE_FULLSCREEN
+                     && windowingMode == WINDOWING_MODE_PINNED
+                     && !mTransitionController.isShellTransitionsEnabled()) {
+-                mDisplayContent.mPinnedTaskController
+-                        .deferOrientationChangeForEnteringPipFromFullScreenIfNeeded();
++                // For exclude this case:
++                // In landscape, if topActivity from split-screen to pip,
++                // it will change onFixedRotationStarted(PipTaskOrganizer) value to be true,
++                // who makes the pip-bounds error. We avoid it and hope pip do animator directly.
++                if (!(topActivity.getLastParentBeforePip() != null
++                        && topActivity.getLastParentBeforePip().inMultiWindowMode())) {
++                    mDisplayContent.mPinnedTaskController
++                            .deferOrientationChangeForEnteringPipFromFullScreenIfNeeded();
++                }
+             }
+         } finally {
+             mAtmService.continueWindowLayout();
+diff --git a/services/core/java/com/android/server/wm/WindowProcessController.java b/services/core/java/com/android/server/wm/WindowProcessController.java
+index 04799204322d..731d7e2ec6e5 100644
+--- a/services/core/java/com/android/server/wm/WindowProcessController.java
++++ b/services/core/java/com/android/server/wm/WindowProcessController.java
+@@ -1342,6 +1342,13 @@ public class WindowProcessController extends ConfigurationContainer<Configuratio
+         unregisterDisplayAreaConfigurationListener();
+     }
+ 
++    /**
++     * Destroys the WindwoProcessController, after the process has been removed.
++     */
++    void destroy() {
++        unregisterConfigurationListeners();
++    }
++
+     /**
+      * Check if activity configuration override for the activity process needs an update and perform
+      * if needed. By default we try to override the process configuration to match the top activity
+diff --git a/services/core/java/com/android/server/wm/WindowProcessControllerMap.java b/services/core/java/com/android/server/wm/WindowProcessControllerMap.java
+index 2767972f7ea0..424b0436a008 100644
+--- a/services/core/java/com/android/server/wm/WindowProcessControllerMap.java
++++ b/services/core/java/com/android/server/wm/WindowProcessControllerMap.java
+@@ -19,8 +19,8 @@ package com.android.server.wm;
+ import android.util.ArraySet;
+ import android.util.SparseArray;
+ 
+-import java.util.Map;
+ import java.util.HashMap;
++import java.util.Map;
+ 
+ final class WindowProcessControllerMap {
+ 
+@@ -67,6 +67,7 @@ final class WindowProcessControllerMap {
+             mPidMap.remove(pid);
+             // remove process from mUidMap
+             removeProcessFromUidMap(proc);
++            proc.destroy();
+         }
+     }
+ 
+diff --git a/services/tests/wmtests/src/com/android/server/wm/WindowProcessControllerMapTests.java b/services/tests/wmtests/src/com/android/server/wm/WindowProcessControllerMapTests.java
+index c2ee0798fd07..2a3c9bca0cc6 100644
+--- a/services/tests/wmtests/src/com/android/server/wm/WindowProcessControllerMapTests.java
++++ b/services/tests/wmtests/src/com/android/server/wm/WindowProcessControllerMapTests.java
+@@ -22,6 +22,8 @@ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertFalse;
+ import static org.junit.Assert.assertNull;
+ import static org.junit.Assert.assertTrue;
++import static org.mockito.Mockito.spy;
++import static org.mockito.Mockito.verify;
+ 
+ import android.os.UserHandle;
+ import android.platform.test.annotations.Presubmit;
+@@ -129,4 +131,14 @@ public class WindowProcessControllerMapTests extends WindowTestsBase {
+         assertEquals(uid2processes.size(), 1);
+         assertEquals(mProcessMap.getProcess(FAKE_PID1), pid1uid2);
+     }
++
++    @Test
++    public void testRemove_callsDestroy() {
++        var proc = spy(pid1uid1);
++        mProcessMap.put(FAKE_PID1, proc);
++
++        mProcessMap.remove(FAKE_PID1);
++
++        verify(proc).destroy();
++    }
+ }
+diff --git a/services/tests/wmtests/src/com/android/server/wm/WindowProcessControllerTests.java b/services/tests/wmtests/src/com/android/server/wm/WindowProcessControllerTests.java
+index 8bd414856394..60bdec154281 100644
+--- a/services/tests/wmtests/src/com/android/server/wm/WindowProcessControllerTests.java
++++ b/services/tests/wmtests/src/com/android/server/wm/WindowProcessControllerTests.java
+@@ -157,6 +157,17 @@ public class WindowProcessControllerTests extends WindowTestsBase {
+         assertEquals(displayBounds, mWpc.getConfiguration().windowConfiguration.getBounds());
+     }
+ 
++    @Test
++    public void testDestroy_unregistersDisplayAreaListener() {
++        final TestDisplayContent testDisplayContent1 = createTestDisplayContentInContainer();
++        final DisplayArea imeContainer1 = testDisplayContent1.getImeContainer();
++        mWpc.registerDisplayAreaConfigurationListener(imeContainer1);
++
++        mWpc.destroy();
++
++        assertNull(mWpc.getDisplayArea());
++    }
++
+     @Test
+     public void testSetRunningRecentsAnimation() {
+         mWpc.setRunningRecentsAnimation(true);
+-- 
+2.41.0
+
