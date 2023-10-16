@@ -28,8 +28,8 @@ Change-Id: I704deb381aadc9b72a20f95db355ababa792a859
  libs/hwui/Android.bp                          |  10 +-
  media/java/android/media/MediaCodec.java      |   7 +-
  packages/SystemUI/res/layout/qs_carrier.xml   |   7 +-
- .../SystemUI/res/values/custom_config.xml     |  41 ++++
- .../SystemUI/res/values/custom_dimens.xml     |   2 +
+ .../SystemUI/res/values/derp_config.xml     |  41 ++++
+ .../SystemUI/res/values/derp_dimens.xml     |   2 +
  .../src/com/android/systemui/SwipeHelper.java |   2 +-
  .../systemui/biometrics/UdfpsController.java  | 108 ++++++++
  .../biometrics/UdfpsControllerOverlay.kt      |  10 +-
@@ -1030,10 +1030,10 @@ index a854660f64f8..e71c084529ab 100644
 -</com.android.systemui.qs.carrier.QSCarrier>
 \ No newline at end of file
 +</com.android.systemui.qs.carrier.QSCarrier>
-diff --git a/packages/SystemUI/res/values/custom_config.xml b/packages/SystemUI/res/values/custom_config.xml
+diff --git a/packages/SystemUI/res/values/derp_config.xml b/packages/SystemUI/res/values/derp_config.xml
 index 6929fc5f7b23..608d019dad68 100644
---- a/packages/SystemUI/res/values/custom_config.xml
-+++ b/packages/SystemUI/res/values/custom_config.xml
+--- a/packages/SystemUI/res/values/derp_config.xml
++++ b/packages/SystemUI/res/values/derp_config.xml
 @@ -32,4 +32,45 @@
  
      <!-- Preferred max refresh rate at AOD & Ambient Display, if supported by the display. -->
@@ -1080,10 +1080,10 @@ index 6929fc5f7b23..608d019dad68 100644
 +
 +     <bool name="config_statusBarBurnInProtection">false</bool>
  </resources>
-diff --git a/packages/SystemUI/res/values/custom_dimens.xml b/packages/SystemUI/res/values/custom_dimens.xml
+diff --git a/packages/SystemUI/res/values/derp_dimens.xml b/packages/SystemUI/res/values/derp_dimens.xml
 index 58f27e306657..66d6f2c795e0 100644
---- a/packages/SystemUI/res/values/custom_dimens.xml
-+++ b/packages/SystemUI/res/values/custom_dimens.xml
+--- a/packages/SystemUI/res/values/derp_dimens.xml
++++ b/packages/SystemUI/res/values/derp_dimens.xml
 @@ -5,4 +5,6 @@
  
      <!-- Width of the battery icon in the status bar when set to circle style. -->
